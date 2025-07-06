@@ -1,0 +1,12 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Dilithium KeyGen",
+            "type": "shell",
+            "command": "python falcon_keygen.py",
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}
