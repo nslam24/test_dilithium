@@ -16,6 +16,12 @@ Usage examples:
 import oqs
 import argparse
 import os
+import sys
+# Ensure repository root is on sys.path so sibling packages (modes/) can be imported
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+from modes.sequential_mode import sign_sequential, verify_sequential
 import base64
 import json
 import random
@@ -165,6 +171,7 @@ def main():
     parser.add_argument("--sig-type", choices=["dilithium","rsa","ecc"], default="dilithium", help="Signature algorithm type to use")
     parser.add_argument("--users", default=",".join([f"user{i+1}" for i in range(5)]), help="Comma-separated users matching keys/<user>/")
     parser.add_argument("--message", default="Test multisig message", help="Message to sign")
+    parser.add_argument("--sign-mode", choices=["independent","sequential"], default="independent", help="Signing mode to use")
     parser.add_argument("--mode", choices=["ordered","unordered","both"], default="both", help="Which verification mode to run")
     parser.add_argument("--keys-dir", default="keys", help="Directory where per-user keys are stored")
     parser.add_argument("--shuffle", action="store_true", help="Create an out-of-order signature list (shuffle signing order)")
@@ -207,6 +214,19 @@ def main():
         args.level = levels[lv_idx]
 
         modes = ["ordered", "unordered", "both"]
+        # Chọn signing mode (independent / sequential)
+        sign_modes = ["independent", "sequential"]
+        print("Signing modes:")
+        for i, sm in enumerate(sign_modes, start=1):
+            print(f"  {i}) {sm}")
+        sm_choice = input(f"Choose signing mode [1-{len(sign_modes)}] (default 1 - independent): ").strip()
+        try:
+            sm_idx = int(sm_choice) - 1
+            if not (0 <= sm_idx < len(sign_modes)):
+                sm_idx = 0
+        except Exception:
+            sm_idx = 0
+        args.sign_mode = sign_modes[sm_idx]
         for i, m in enumerate(modes, start=1):
             print(f"  {i}) {m}")
         m_choice = input(f"Choose mode [1-{len(modes)}] (default 3 - both): ").strip()
@@ -270,6 +290,8 @@ def main():
 
         # Normalize signature type string for later branching
         sig_type = args.sig_type.lower()
+    # signing mode (independent / sequential)
+    sign_mode = args.sign_mode.lower()
 
     # If keystore requested in non-interactive mode, ensure keystore is loaded
     # (the interactive branch already builds/loads the keystore). This avoids
@@ -372,7 +394,13 @@ def main():
         random.shuffle(sign_order)
 
     ordered_pairs = [key_pairs[i] for i in sign_order]
-    signatures, sign_times = sign_sequence(message, ordered_pairs, level, sig_type)
+    # Choose signing implementation based on requested signing mode
+    if getattr(args, 'sign_mode', 'independent') == 'sequential':
+        # sequential signing chains previous signatures via sha3_512
+        signatures, sign_times = sign_sequential(message, ordered_pairs, level, sig_type)
+    else:
+        # independent signing: each signer signs the same message
+        signatures, sign_times = sign_sequence(message, ordered_pairs, level, sig_type)
 
     # Print summary
     print(f"Signed message with {len(signatures)} signatures (sign order: {sign_order})")
@@ -389,7 +417,11 @@ def main():
         print("\nVerifying ordered (matching signature index to same public key index)")
         # If we shuffled signing order, map public_keys accordingly for 'ordered' verification
         ordered_publics = [public_keys[i] for i in sign_order]
-        ok_ordered, results, verify_times_ordered = verify_ordered(message, signatures, ordered_publics, level, sig_type)
+        # If signing was sequential, use the sequential verifier which rebuilds the chained messages
+        if getattr(args, 'sign_mode', 'independent') == 'sequential':
+            ok_ordered, results, verify_times_ordered = verify_sequential(message, signatures, ordered_publics, level, sig_type)
+        else:
+            ok_ordered, results, verify_times_ordered = verify_ordered(message, signatures, ordered_publics, level, sig_type)
         print(" Ordered verification per-signature:")
         for i, (res, vt) in enumerate(zip(results, verify_times_ordered)):
             print(f"  sig[{i}] verified={res} verify_time={vt:.6f}s")
@@ -409,6 +441,7 @@ def main():
     bundle = {
         "users": users,
         "level": level,
+        "sign_mode": getattr(args, 'sign_mode', 'independent'),
         "sign_order": sign_order,
         "message": base64.b64encode(message).decode(),
         "signatures": [base64.b64encode(s).decode() for s in signatures],
