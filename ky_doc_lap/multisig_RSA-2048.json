@@ -1,0 +1,32 @@
+{
+  "users": [
+    "user1",
+    "user2",
+    "user3",
+    "user4",
+    "user5"
+  ],
+  "level": "RSA-2048",
+  "sign_order": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "message": "UlNBIG11bHRpc2ln",
+  "signatures": [
+    "HQEnWSwQ4PFl1b5fhs7PTplfcRG5Djy+VYhkL8LmwGG1V6xKaoI+Wue35MC5D7hhoohnoptsC9Ha6pGCibIVH//51meoz8v5ELfSfjlkBwvgbluOYKI83h3UAtxe57tNtY7WSWDrdWOpwHyjJb9fmIXF9kL1kWa9l9Xqgdq9eoerjhmUYc/XeYOQ1JpDycHT/eVs7X64Mx71ZzraNt7AZBMVxZWTeOsCEjrWU4mpHCQp6Ajks47sWkMRLd8PYfDgeiibGJtde+v1RyvKTw10/HmmTyuAPB3DcCsB+hWXIsdEW2Q7LbSAG94kAeL7mZotezNK5wEMgBUYeaJW+xPq9w==",
+    "CacvL6WPILasvDoczFur5FOtpAInj9OPzby+M1n2Cjg00Tywp2peC4OgL0Wee7Th25m5JrXi+C3B+hfa9yrRb+0mKxyNGYc58noJAqXz4ziP9OYhBH3FgzpWE1+53r22OFcF7hd7mOQYS3L+jEwyROZaxOlODM1FoSTV8catQB9N4ugakNEK8tJheDsBQnl9WUzbRz0nSYzNbdstoXS0g2yE+kUBvJkYbEQBvZLE1zY7zWG5ow+muuzpXde6W7nc1GCVq+2B/zZV4FhR/oNxN6mo74lrsrpzyQAo1FLOrmBzO+7d0er8YWcldcnGNwRk5FcUvmDHiytP5iDf1ywxVA==",
+    "GVuSv9ctTR7ncUU2ZN5LQY9VvY49ORyTIuRvb+0Va1hmuedeUsdPK1IGN8gvsanc0UB4W7GuvPi+Gew9PO4fjyWPuH69qcxeBjgXi/uY55LOYJSw/UCsqRXSMv7fkbDTHacwuI3K4rSRz6fJcDGKSbP9p/uT2nwVz7p2gzRoIp/N/mEfDAPApUdjfljMIG8yIy+AG7Zglzx3+hE7HA87p6uXl6Jzp0gehheD4sD0/+SDYDQZQw8P+jCAMnTnngf5obHvYDlhmAB09mhKyiMRfA+UU+qzuqzITxwigbI/3gBD1TPYldF/c7GyhJii4mMI1qXTkkYkJNJfoEkJBF+yWg==",
+    "KCLtF2GXhCKEEISoy4wUS/YresGJ5M/h+OsrbcicXziVBCpbxSSYOVog2fRRmx8kUEZ8C1xk0vnMZjcRaG5huVjXH47sE3nEDJ+Y64bJSo3k9rFF31D2IL5Y+GWzJkhxdCwsoStNOAmd6nXUeXLKW2b8fx266FmPtUWFDZfihGX71skderfDOs4zGFvABLlUZHp2+Okb4z+G8/0nvRCYvvFC+m3LzlmezuDrBfrmtDlFU7wuQnzleoBcFTvrX2sMwQimPAyWStJpDEXZamgdThC9SXBPIWwfS0KKTT6ZKKzvEr5V4CqxwTV0jQ2JUsBK8240pbOYMiB8kcelh3RH4Q==",
+    "mwzgPumjfN0V/kvMeHC98CzxwsiLswra+vSyt/HwYafWZvCi3EwAldyLR+dJAN+eePFvIA4q6d4c7u5PR3o2Ig3gn6am3lBCcZqXY832cJepYyNXB6l7y+aoU1GkczVJgeOxQdGaqkSnO3+vjQtopk7lL/DuCJakcX2tWhA9JIj8lMMIDcAbyl1sP5hNDfuk9A6XeXAGbvTzZtVlkWFLq7CTbca80uLLWR4T66/p8YiJ2Lvh++y4sqVlGdODbY0AXJWBnccnvT1u8VA9ZkpoLjw/skZdaDC+3fQQsB2Zcam8TA/ce8ABaL0qEkmhyCF6wmx9MP4+U+KwVv/8gA1lQw=="
+  ],
+  "sign_times": [
+    0.0014581680297851562,
+    0.0010182857513427734,
+    0.00101470947265625,
+    0.0009961128234863281,
+    0.0010154247283935547
+  ]
+}

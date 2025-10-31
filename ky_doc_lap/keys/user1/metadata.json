@@ -1,0 +1,23 @@
+{
+  "user": "user1",
+  "keys": {
+    "Dilithium2": {
+      "pub_len": 1312,
+      "priv_len": 2528,
+      "pub_path": "user1/Dilithium2/public.key",
+      "priv_path": "user1/Dilithium2/private.key"
+    },
+    "Dilithium3": {
+      "pub_len": 1952,
+      "priv_len": 4000,
+      "pub_path": "user1/Dilithium3/public.key",
+      "priv_path": "user1/Dilithium3/private.key"
+    },
+    "Dilithium5": {
+      "pub_len": 2592,
+      "priv_len": 4864,
+      "pub_path": "user1/Dilithium5/public.key",
+      "priv_path": "user1/Dilithium5/private.key"
+    }
+  }
+}
