@@ -271,14 +271,19 @@ def generate_threshold_keypair_luov(n_parties: int, threshold: int) -> Tuple[Lis
 
 
 def sign_threshold_luov(message: bytes, sk_shares: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[float]]:
-    """Threshold signing for LUOV using LSSS partial evaluation.
+    """Ký ngưỡng cho LUOV dùng tính toán LSSS từng phần.
     
-    Mock implementation simulates:
-    1. Each party evaluates their share on the message
-    2. Partial signatures are combined via additive reconstruction
-    3. Final signature is the aggregate
+    Triển khai mô phỏng mô tả:
+    1. Mỗi bên tính giá trị phần chia sẻ của họ trên thông điệp
+    2. Chữ ký từng phần được kết hợp qua tái tạo cộng tính
+    3. Chữ ký cuối là tổng hợp
     
-    Returns: (signature_dict, sign_times_per_party)
+    Trong LUOV thực (theo Cozzo & Smart):
+    - Mỗi bên giữ 〈s_i〉 (phần chia sẻ bí mật)
+    - MPC tính F(s) = y (giải hệ phương trình bậc hai)
+    - Kết hợp phản hồi từng phần qua LSSS
+    
+    Trả về: (signature_dict, sign_times_per_party)
     """
     sign_times = []
     partials = []
@@ -286,7 +291,7 @@ def sign_threshold_luov(message: bytes, sk_shares: List[Dict[str, Any]]) -> Tupl
     for share in sk_shares:
         t0 = time.time()
         
-        # Mock partial signature: hash of message + share
+        # Chữ ký từng phần mô phỏng: hash của message + phần chia sẻ
         partial_data = _sha3_512(message + str(share["y"]).encode())
         partial = {
             "party_id": share["party_id"],
@@ -298,7 +303,7 @@ def sign_threshold_luov(message: bytes, sk_shares: List[Dict[str, Any]]) -> Tupl
         t1 = time.time()
         sign_times.append(t1 - t0)
     
-    # Aggregate partials (mock: just concatenate)
+    # Tổng hợp các phần (mô phỏng: chỉ nối chuỗi)
     signature = {
         "scheme": "luov-threshold",
         "partials": partials,
@@ -309,20 +314,24 @@ def sign_threshold_luov(message: bytes, sk_shares: List[Dict[str, Any]]) -> Tupl
 
 
 def verify_threshold_luov(message: bytes, signature: Dict[str, Any], pk: Dict[str, Any]) -> Tuple[bool, float]:
-    """Verify threshold LUOV signature.
+    """Xác minh chữ ký ngưỡng LUOV.
     
-    Mock implementation: checks that signature structure is valid.
-    Real LUOV verification would check quadratic equations.
+    Triển khai mô phỏng: kiểm tra cấu trúc chữ ký hợp lệ.
+    Xác minh LUOV thực sẽ kiểm tra các phương trình bậc hai.
     
-    Returns: (is_valid, verify_time)
+    Trong LUOV chuẩn:
+    - Kiểm tra: F(pk, signature) = H(message)
+    - F là hệ phương trình bậc hai trên Fq
+    
+    Trả về: (is_valid, verify_time)
     """
     t0 = time.time()
     
-    # Mock verification: check that challenge matches
+    # Xác minh mô phỏng: kiểm tra thử thách khớp
     expected_challenge = base64.b64encode(_sha3_512(message)[:32]).decode()
     is_valid = signature.get("challenge") == expected_challenge
     
-    # Also check we have enough partials
+    # Cũng kiểm tra có đủ số phần từng phần
     is_valid = is_valid and len(signature.get("partials", [])) >= pk.get("t", 0)
     
     t1 = time.time()
@@ -335,48 +344,48 @@ def verify_threshold_luov(message: bytes, signature: Dict[str, Any], pk: Dict[st
 # ============================================================================
 
 def generate_threshold_keypair(n_parties: int, threshold: int, scheme: str, level: str = "Dilithium3") -> Tuple[Any, Any]:
-    """Generate threshold keypair for specified scheme.
+    """Sinh cặp khóa ngưỡng cho lược đồ chỉ định.
     
-    Args:
-      n_parties: total number of signers (n)
-      threshold: minimum required (t)
-      scheme: "dilithium-threshold" or "luov-threshold"
-      level: security level (for Dilithium)
+    Tham số:
+      n_parties: tổng số người ký (n)
+      threshold: số tối thiểu cần thiết (t)
+      scheme: "dilithium-threshold" hoặc "luov-threshold"
+      level: mức bảo mật (cho Dilithium)
     
-    Returns: (sk_shares, pk)
+    Trả về: (sk_shares, pk)
     """
     if scheme == "dilithium-threshold":
         return generate_threshold_keypair_dilithium(n_parties, threshold, level)
     elif scheme == "luov-threshold":
         return generate_threshold_keypair_luov(n_parties, threshold)
     else:
-        raise ValueError(f"Unsupported threshold scheme: {scheme}")
+        raise ValueError(f"Lược đồ ngưỡng không được hỗ trợ: {scheme}")
 
 
 def sign_threshold(message: bytes, sk_shares: Any, scheme: str, level: str = "Dilithium3") -> Tuple[Any, List[float]]:
-    """Threshold signing for specified scheme.
+    """Ký ngưỡng cho lược đồ chỉ định.
     
-    Returns: (signature, sign_times_per_party)
+    Trả về: (signature, sign_times_per_party)
     """
     if scheme == "dilithium-threshold":
         return sign_threshold_dilithium(message, sk_shares, level)
     elif scheme == "luov-threshold":
         return sign_threshold_luov(message, sk_shares)
     else:
-        raise ValueError(f"Unsupported threshold scheme: {scheme}")
+        raise ValueError(f"Lược đồ ngưỡng không được hỗ trợ: {scheme}")
 
 
 def verify_threshold(message: bytes, signature: Any, pk: Any, scheme: str, level: str = "Dilithium3") -> Tuple[bool, float]:
-    """Verify threshold signature for specified scheme.
+    """Xác minh chữ ký ngưỡng cho lược đồ chỉ định.
     
-    Returns: (is_valid, verify_time)
+    Trả về: (is_valid, verify_time)
     """
     if scheme == "dilithium-threshold":
         return verify_threshold_dilithium(message, signature, pk, level)
     elif scheme == "luov-threshold":
         return verify_threshold_luov(message, signature, pk)
     else:
-        raise ValueError(f"Unsupported threshold scheme: {scheme}")
+        raise ValueError(f"Lược đồ ngưỡng không được hỗ trợ: {scheme}")
 
 
 # ============================================================================
