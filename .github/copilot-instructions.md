@@ -72,6 +72,21 @@ Combine partials via interpolation:
 
 σ = combine(σ₁, σ₂, …, σ_t)
 Ensures distributed trust and fault tolerance.
+Copilot should assist in implementing threshold signing mechanisms inspired by:
+- Cozzo & Smart (LUOV, MQ-based LSSS)
+- Davydov & Bezzateev (Dilithium-like lattice additive threshold)
+
+Each signer holds partial secret shares and produces partial responses.
+The aggregator combines them to form one valid signature (z, c).
+Verification follows standard Dilithium/LUOV equations with reconstructed aggregates.
+
+Copilot should:
+- Provide modular Python functions for threshold key generation, signing, and verification.
+- Use additive key shares for lattice (Dilithium).
+- Use LSSS sharing for MQ-based (LUOV).
+- Use SHA3_512 for challenge derivation.
+- Output sign/verify timing for performance comparison.
+
 
 🧱 File Structure (Expected)
 markdown
