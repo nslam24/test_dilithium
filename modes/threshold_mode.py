@@ -120,38 +120,40 @@ def shamir_reconstruct(shares: List[Tuple[int, int]], field_prime: int = MockFq.
 # ============================================================================
 
 def generate_threshold_keypair_dilithium(n_parties: int, threshold: int, level: str = "Dilithium3") -> Tuple[List[bytes], bytes]:
-    """Generate threshold key shares for Dilithium using additive sharing.
+    """Sinh cặp khóa ngưỡng cho Dilithium dùng chia sẻ cộng tính.
     
-    Strategy:
-    - Generate a master secret key using liboqs
-    - Split it into n additive shares: sk = s_1 + s_2 + ... + s_n (mod q)
-    - Derive public key from master secret (or sum of A*s_i)
+    Chiến lược (theo Davydov & Bezzateev):
+    - Sinh khóa bí mật chủ bằng liboqs
+    - Chia thành n phần cộng tính: sk = s_1 + s_2 + ... + s_n (mod q)
+    - Tính khóa công khai từ khóa bí mật chủ (hoặc tổng A*s_i)
     
-    Args:
-      n_parties: total number of signers
-      threshold: minimum number needed (t-of-n); for additive we need all n
-      level: Dilithium security level
+    Giao thức thực tế sẽ dùng MPC để tạo khóa phân tán mà không có khóa chủ tập trung.
     
-    Returns:
-      (sk_shares, pk) where sk_shares is list of secret key bytes
+    Tham số:
+      n_parties: tổng số người ký
+      threshold: số tối thiểu cần thiết (t-of-n); với chia sẻ cộng cần tất cả n
+      level: mức bảo mật Dilithium
+    
+    Trả về:
+      (sk_shares, pk) trong đó sk_shares là danh sách các phần khóa bí mật (bytes)
     """
-    # Generate master keypair
+    # Sinh cặp khóa chủ
     with oqs.Signature(level) as sig:
         pk = sig.generate_keypair()
         master_sk = sig.export_secret_key()
     
-    # For true threshold, we'd use Shamir or LSSS. 
-    # Here we use simple additive sharing for demonstration:
-    # Each party gets a random share; last party gets remainder
+    # Để có ngưỡng thực sự, ta sẽ dùng Shamir hoặc LSSS.
+    # Ở đây dùng chia sẻ cộng đơn giản để minh họa:
+    # Mỗi bên nhận phần ngẫu nhiên; bên cuối nhận phần còn lại
     sk_len = len(master_sk)
     shares = []
     
-    # Generate n-1 random shares
+    # Sinh n-1 phần ngẫu nhiên
     for i in range(n_parties - 1):
         share = os.urandom(sk_len)
         shares.append(share)
     
-    # Compute last share so sum equals master (XOR for bytes as simple combiner)
+    # Tính phần cuối sao cho tổng XOR bằng khóa chủ
     last_share = bytearray(sk_len)
     for i in range(sk_len):
         acc = master_sk[i]
@@ -165,24 +167,24 @@ def generate_threshold_keypair_dilithium(n_parties: int, threshold: int, level: 
 
 
 def sign_threshold_dilithium(message: bytes, sk_shares: List[bytes], level: str = "Dilithium3") -> Tuple[bytes, List[float]]:
-    """Threshold signing for Dilithium using partial response aggregation.
+    """Ký ngưỡng cho Dilithium dùng tổng hợp phản hồi từng phần.
     
-    Protocol (simplified Davydov & Bezzateev):
-    1. Each party i generates random y_i, computes v_i = A*y_i
-    2. Aggregate w = Σ v_i
-    3. Compute challenge c = H(message || w)
-    4. Each party computes z_i = y_i + c*s_i
-    5. Aggregate z = Σ z_i
-    6. Signature is (z, c)
+    Giao thức (đơn giản hóa từ Davydov & Bezzateev):
+    1. Mỗi bên i sinh ngẫu nhiên y_i, tính v_i = A*y_i
+    2. Tổng hợp w = Σ v_i
+    3. Tính thử thách c = H(message || w) dùng SHA3_512
+    4. Mỗi bên tính z_i = y_i + c*s_i
+    5. Tổng hợp z = Σ z_i
+    6. Chữ ký là (z, c)
     
-    For simplicity with liboqs: we reconstruct the full key and sign.
-    In a real threshold scheme, partial responses would be combined via MPC.
+    Để đơn giản với liboqs: ta khôi phục khóa đầy đủ rồi ký.
+    Trong lược đồ ngưỡng thực, phản hồi từng phần sẽ được kết hợp qua MPC.
     
-    Returns: (signature, sign_times_per_party)
+    Trả về: (signature, sign_times_per_party)
     """
     sign_times = []
     
-    # Reconstruct master secret by XORing all shares
+    # Khôi phục khóa bí mật chủ bằng XOR tất cả các phần
     sk_len = len(sk_shares[0])
     master_sk = bytearray(sk_len)
     for share in sk_shares:
@@ -191,13 +193,13 @@ def sign_threshold_dilithium(message: bytes, sk_shares: List[bytes], level: str 
     
     master_sk = bytes(master_sk)
     
-    # Sign with reconstructed key (simulating aggregated signature)
+    # Ký bằng khóa đã khôi phục (mô phỏng chữ ký tổng hợp)
     t0 = time.time()
     with oqs.Signature(level, master_sk) as signer:
         signature = signer.sign(message)
     t1 = time.time()
     
-    # Record time for each "party" (in reality they'd sign in parallel)
+    # Ghi thời gian cho từng "bên" (thực tế họ sẽ ký song song)
     sign_time = (t1 - t0) / len(sk_shares)
     sign_times = [sign_time] * len(sk_shares)
     
@@ -205,11 +207,12 @@ def sign_threshold_dilithium(message: bytes, sk_shares: List[bytes], level: str 
 
 
 def verify_threshold_dilithium(message: bytes, signature: bytes, pk: bytes, level: str = "Dilithium3") -> Tuple[bool, float]:
-    """Verify threshold Dilithium signature.
+    """Xác minh chữ ký ngưỡng Dilithium.
     
-    Verification is identical to standard Dilithium verification.
+    Xác minh giống hệt với xác minh Dilithium chuẩn.
+    Kiểm tra: A*z - c*t ≈ w (mod q)
     
-    Returns: (is_valid, verify_time)
+    Trả về: (is_valid, verify_time)
     """
     t0 = time.time()
     with oqs.Signature(level) as verifier:
