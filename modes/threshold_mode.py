@@ -93,10 +93,14 @@ def shamir_share_secret(secret_bytes: bytes, n: int, t: int, field_prime: int = 
 
 
 def shamir_reconstruct(shares: List[Tuple[int, int]], field_prime: int = MockFq.PRIME) -> int:
-    """Reconstruct secret from t shares using Lagrange interpolation."""
+    """Khôi phục bí mật từ t phần chia sẻ dùng nội suy Lagrange.
+    
+    Công thức: secret = Σ (y_i * L_i(0))
+    trong đó L_i(0) là đa thức cơ sở Lagrange tại x=0.
+    """
     secret = 0
     for i, (x_i, y_i) in enumerate(shares):
-        # Lagrange basis polynomial
+        # Tính đa thức cơ sở Lagrange L_i(0)
         num = 1
         den = 1
         for j, (x_j, _) in enumerate(shares):
@@ -104,7 +108,7 @@ def shamir_reconstruct(shares: List[Tuple[int, int]], field_prime: int = MockFq.
                 num = (num * (-x_j)) % field_prime
                 den = (den * (x_i - x_j)) % field_prime
         
-        # Modular inverse of denominator
+        # Nghịch đảo modular của mẫu số
         lagrange_coeff = (num * pow(den, -1, field_prime)) % field_prime
         secret = (secret + y_i * lagrange_coeff) % field_prime
     
