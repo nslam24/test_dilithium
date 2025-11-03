@@ -227,27 +227,27 @@ def verify_threshold_dilithium(message: bytes, signature: bytes, pk: bytes, leve
 # ============================================================================
 
 def generate_threshold_keypair_luov(n_parties: int, threshold: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Generate threshold LUOV keypair using LSSS over Fq.
+    """Sinh cặp khóa ngưỡng LUOV dùng LSSS trên Fq.
     
-    Mock implementation: generates random secret shares and a public key.
-    Real implementation would involve:
-    - Generate LUOV secret key (oil/vinegar variables)
-    - Use LSSS to share secret over Fq
-    - Derive public key from shared secret
+    Triển khai mô phỏng: sinh các phần bí mật ngẫu nhiên và khóa công khai.
+    Triển khai thực sẽ bao gồm:
+    - Sinh khóa bí mật LUOV (biến oil/vinegar)
+    - Dùng LSSS để chia sẻ bí mật trên Fq
+    - Tính khóa công khai từ bí mật đã chia sẻ
     
-    Returns: (sk_shares, pk) where each share is a dict with party info
+    Trả về: (sk_shares, pk) trong đó mỗi phần là dict chứa thông tin bên
     """
-    # Mock secret: random field elements
-    secret_size = 128  # mock dimension
+    # Bí mật mô phỏng: các phần tử trường ngẫu nhiên
+    secret_size = 128  # chiều mock
     master_secret = [MockFq.random_element() for _ in range(secret_size)]
     
-    # Convert to bytes for Shamir sharing
-    secret_bytes = b''.join(x.to_bytes(8, 'big') for x in master_secret[:16])  # first 128 bytes
+    # Chuyển sang bytes để chia sẻ Shamir
+    secret_bytes = b''.join(x.to_bytes(8, 'big') for x in master_secret[:16])  # 128 bytes đầu
     
-    # Generate Shamir shares
+    # Sinh phần chia sẻ Shamir
     shamir_shares = shamir_share_secret(secret_bytes, n_parties, threshold)
     
-    # Each party gets a share dict
+    # Mỗi bên nhận một dict phần chia sẻ
     sk_shares = []
     for idx, (x, y) in enumerate(shamir_shares):
         share = {
@@ -259,7 +259,7 @@ def generate_threshold_keypair_luov(n_parties: int, threshold: int) -> Tuple[Lis
         }
         sk_shares.append(share)
     
-    # Mock public key (in LUOV this would be the quadratic map)
+    # Khóa công khai mô phỏng (trong LUOV đây là ánh xạ bậc hai)
     pk = {
         "scheme": "luov-threshold",
         "n": n_parties,
