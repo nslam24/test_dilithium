@@ -67,17 +67,23 @@ class MockFq:
 # ============================================================================
 
 def shamir_share_secret(secret_bytes: bytes, n: int, t: int, field_prime: int = MockFq.PRIME) -> List[Tuple[int, int]]:
-    """Split secret into n shares using Shamir (t,n) threshold.
+    """Chia bí mật thành n phần dùng Shamir (t,n) ngưỡng.
     
-    Returns list of (x, y) shares where x is party index (1..n).
+    Phương pháp:
+    - Chọn đa thức ngẫu nhiên bậc t-1: f(x) = a_0 + a_1*x + ... + a_{t-1}*x^{t-1}
+    - a_0 = secret (bí mật)
+    - Tính f(1), f(2), ..., f(n) làm các phần chia sẻ
+    - Cần ít nhất t phần để khôi phục bí mật qua nội suy Lagrange
+    
+    Trả về danh sách (x, y) trong đó x là chỉ số bên (1..n), y = f(x).
     """
-    # Convert secret to integer
+    # Chuyển bí mật thành số nguyên
     secret = int.from_bytes(secret_bytes, 'big') % field_prime
     
-    # Generate random polynomial coefficients a_1, ..., a_{t-1}
+    # Sinh hệ số ngẫu nhiên a_1, ..., a_{t-1} cho đa thức
     coeffs = [secret] + [random.randint(0, field_prime - 1) for _ in range(t - 1)]
     
-    # Evaluate polynomial at x = 1, 2, ..., n
+    # Tính giá trị đa thức tại x = 1, 2, ..., n
     shares = []
     for x in range(1, n + 1):
         y = sum(c * pow(x, i, field_prime) for i, c in enumerate(coeffs)) % field_prime
