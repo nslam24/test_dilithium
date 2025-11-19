@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+0 #!/usr/bin/env python3
 """Independent multi-signature helpers.
 
 Each signer independently signs the same message M. This produces N
