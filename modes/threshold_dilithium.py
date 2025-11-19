@@ -29,9 +29,179 @@ DILITHIUM_ETA = 2      # small coeff bound for secrets/nonces
 # B = gamma1 - beta
 SIGNATURE_BOUND = 523913  # B: |z_i| <= 523913 (gamma1 - beta for Dilithium 3)
 
+# NTT Constants for negacyclic NTT (X^N + 1 reduction)
+# For ring Z_q[X]/(X^256 + 1), we use ω a primitive 512-th root where ω^256 = -1
+# Zetas are computed as ω^(2*bitrev(i, 8) + 1) for the negacyclic property
+NTT_ROOT = 1753  # ω: primitive 512th root of unity mod q (ω^512=1, ω^256=-1)
+NTT_ROOT_INV = pow(NTT_ROOT, -1, DILITHIUM_Q)
+N_INV = pow(DILITHIUM_N, -1, DILITHIUM_Q)
+
+# Precompute zetas for negacyclic NTT: ζ[i] = ω^(2*bitrev(i, 8) + 1)
+_NTT_ZETAS = None
+_NTT_ZETAS_INV = None
+
+def _init_ntt_zetas():
+    """Precompute zetas for negacyclic NTT following Dilithium spec"""
+    global _NTT_ZETAS, _NTT_ZETAS_INV
+    if _NTT_ZETAS is not None:
+        return
+    
+    # For N=256: ζ[i] = ω^(2*bitrev(i, 8) + 1)
+    # This gives us odd powers of ω in bit-reversed order
+    _NTT_ZETAS = []
+    for i in range(DILITHIUM_N):
+        br = _bitreverse(i, 8)  # 8 bits for N=256
+        exp = (2 * br + 1) % 512  # Odd exponents mod 512
+        _NTT_ZETAS.append(pow(NTT_ROOT, exp, DILITHIUM_Q))
+    
+    # For inverse: use negative exponents
+    _NTT_ZETAS_INV = []
+    for i in range(DILITHIUM_N):
+        br = _bitreverse(i, 8)
+        exp = (512 - (2 * br + 1)) % 512  # -exp mod 512
+        _NTT_ZETAS_INV.append(pow(NTT_ROOT, exp, DILITHIUM_Q))
+
+# NTT parameters for q=8380417, N=256
+# Căn bậc N của đơn vị: ω^N ≡ 1 (mod q), ω^(N/2) ≡ -1 (mod q)
+# Với q=8380417, N=256: ω = 1753 (primitive 512-th root of unity)
+NTT_ROOT = 1753  # Căn nguyên thủy bậc 512 của đơn vị mod q
+NTT_ROOT_INV = pow(NTT_ROOT, -1, DILITHIUM_Q)  # Nghịch đảo của ω
+N_INV = pow(DILITHIUM_N, -1, DILITHIUM_Q)  # N^(-1) mod q cho INTT
+
 
 def _sha3_512(data: bytes) -> bytes:
     return hashlib.sha3_512(data).digest()
+
+
+# =====================================
+# NTT Core Functions (Number Theoretic Transform)
+# =====================================
+
+def _bitreverse(n: int, bits: int) -> int:
+    """Đảo ngược bit của số n với độ dài bits."""
+    result = 0
+    for i in range(bits):
+        if n & (1 << i):
+            result |= 1 << (bits - 1 - i)
+    return result
+
+
+def _precompute_ntt_roots(N: int, root: int, q: int) -> List[int]:
+    """Tính trước các lũy thừa của ω cho NTT: ω^0, ω^1, ..., ω^(N-1)."""
+    roots = [1] * N
+    for i in range(1, N):
+        roots[i] = (roots[i-1] * root) % q
+    return roots
+
+
+def _precompute_ntt_roots_bitrev(N: int, root: int, q: int) -> List[int]:
+    """Tính trước các căn với bit-reversed index cho Cooley-Tukey."""
+    logn = N.bit_length() - 1
+    roots = [1] * N
+    roots[0] = 1
+    for i in range(1, N):
+        br = _bitreverse(i, logn)
+        roots[i] = pow(root, br, q)
+    return roots
+
+
+# Global precomputed roots (lazy initialization)
+_NTT_ROOTS_CACHE = {}
+
+
+def _get_ntt_roots(N: int, q: int, root: int) -> List[int]:
+    """Lấy hoặc tính NTT roots (cached)."""
+    key = (N, q, root)
+    if key not in _NTT_ROOTS_CACHE:
+        _NTT_ROOTS_CACHE[key] = _precompute_ntt_roots_bitrev(N, root, q)
+    return _NTT_ROOTS_CACHE[key]
+
+
+def ntt_forward(coeffs: List[int], q: int = DILITHIUM_Q, root: int = NTT_ROOT) -> List[int]:
+    """
+    Negacyclic NTT (Coefficient Domain → NTT Domain) for R_q = Z_q[X]/(X^N+1).
+    
+    Uses precomputed bit-reversed powers of primitive 512th root ω.
+    This implicitly handles the X^N+1 reduction.
+    
+    Input: coeffs (length N, coefficient domain)
+    Output: ntt_coeffs (length N, NTT domain)
+    """
+    _init_ntt_zetas()
+    N = len(coeffs)
+    logn = N.bit_length() - 1
+    
+    # Step 1: Multiply by zetas (preprocessing for negacyclic)
+    a = [(coeffs[i] * _NTT_ZETAS[i]) % q for i in range(N)]
+    
+    # Step 2: Bit-reversal permutation
+    for i in range(N):
+        br = _bitreverse(i, logn)
+        if i < br:
+            a[i], a[br] = a[br], a[i]
+    
+    # Step 3: Cooley-Tukey butterfly
+    roots = _get_ntt_roots(N, q, root)
+    
+    length = 1
+    while length < N:
+        for start in range(0, N, 2 * length):
+            k = 0
+            for j in range(start, start + length):
+                w = roots[k * (N // (2 * length))]
+                u = a[j]
+                v = (a[j + length] * w) % q
+                a[j] = (u + v) % q
+                a[j + length] = (u - v) % q
+                k += 1
+        length *= 2
+    
+    return a
+
+
+def ntt_inverse(ntt_coeffs: List[int], q: int = DILITHIUM_Q, root_inv: int = NTT_ROOT_INV, n_inv: int = N_INV) -> List[int]:
+    """
+    Negacyclic INTT (NTT Domain → Coefficient Domain) for R_q = Z_q[X]/(X^N+1).
+    
+    Reverses the negacyclic NTT transformation.
+    
+    Input: ntt_coeffs (length N, NTT domain)
+    Output: coeffs (length N, coefficient domain)
+    """
+    _init_ntt_zetas()
+    N = len(ntt_coeffs)
+    logn = N.bit_length() - 1
+    
+    # Step 1: Bit-reversal permutation
+    a = ntt_coeffs[:]
+    for i in range(N):
+        br = _bitreverse(i, logn)
+        if i < br:
+            a[i], a[br] = a[br], a[i]
+    
+    # Step 2: Cooley-Tukey với ω^(-1)
+    roots_inv = _get_ntt_roots(N, q, root_inv)
+    
+    length = 1
+    while length < N:
+        for start in range(0, N, 2 * length):
+            k = 0
+            for j in range(start, start + length):
+                w = roots_inv[k * (N // (2 * length))]
+                u = a[j]
+                v = (a[j + length] * w) % q
+                a[j] = (u + v) % q
+                a[j + length] = (u - v) % q
+                k += 1
+        length *= 2
+    
+    # Step 3: Scale by N^(-1)
+    a = [(coeff * n_inv) % q for coeff in a]
+    
+    # Step 4: Multiply by inverse zetas (postprocessing for negacyclic)
+    a = [(a[i] * _NTT_ZETAS_INV[i]) % q for i in range(N)]
+    
+    return a
 
 
 def _hash_to_challenge(message: bytes, w_bytes: bytes, q: int = DILITHIUM_Q) -> int:
@@ -57,21 +227,22 @@ def vec_zeros(k: int, q: int, N: int) -> List["Poly"]:
 # PHẦN 2: LỚP TOÁN HỌC VÀNH (Poly)
 # =====================================
 class Poly:
-    def __init__(self, coeffs: List[int], q: int = DILITHIUM_Q, N: int = DILITHIUM_N):
+    def __init__(self, coeffs: List[int], q: int = DILITHIUM_Q, N: int = DILITHIUM_N, in_ntt: bool = False):
         self.q = q
         self.N = N
         if len(coeffs) != N:
             raise ValueError(f"Polynomial length {len(coeffs)} != N={N}")
         self.coeffs = [c % q for c in coeffs]
+        self.in_ntt = in_ntt  # Trạng thái: True = NTT domain, False = coefficient domain
 
     @classmethod
     def zeros(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> "Poly":
-        return cls([0] * N, q, N)
+        return cls([0] * N, q, N, in_ntt=False)
 
     @classmethod
     def uniform_random(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, rnd: Optional[random.Random] = None) -> "Poly":
         r = rnd or random
-        return cls([r.randrange(0, q) for _ in range(N)], q, N)
+        return cls([r.randrange(0, q) for _ in range(N)], q, N, in_ntt=False)
 
     @classmethod
     def small_random(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, eta: int = DILITHIUM_ETA, rnd: Optional[random.Random] = None) -> "Poly":
@@ -80,21 +251,62 @@ class Poly:
         for _ in range(N):
             v = r.randint(-eta, eta)
             coeffs.append(v % q)
-        return cls(coeffs, q, N)
+        return cls(coeffs, q, N, in_ntt=False)
+
+    def to_ntt(self) -> "Poly":
+        """Chuyển từ coefficient domain sang NTT domain."""
+        if self.in_ntt:
+            return self  # Đã ở NTT domain rồi
+        ntt_coeffs = ntt_forward(self.coeffs, self.q, NTT_ROOT)
+        return Poly(ntt_coeffs, self.q, self.N, in_ntt=True)
+
+    def from_ntt(self) -> "Poly":
+        """Chuyển từ NTT domain về coefficient domain."""
+        if not self.in_ntt:
+            return self  # Đã ở coefficient domain rồi
+        coeff_coeffs = ntt_inverse(self.coeffs, self.q, NTT_ROOT_INV, N_INV)
+        return Poly(coeff_coeffs, self.q, self.N, in_ntt=False)
 
     def add(self, other: "Poly") -> "Poly":
+        """Phép cộng: phải ở cùng domain (thường là coefficient domain)."""
         self._check_same(other)
-        return Poly([(a + b) % self.q for a, b in zip(self.coeffs, other.coeffs)], self.q, self.N)
+        if self.in_ntt != other.in_ntt:
+            raise ValueError("Cannot add polynomials in different domains")
+        result_coeffs = [(a + b) % self.q for a, b in zip(self.coeffs, other.coeffs)]
+        return Poly(result_coeffs, self.q, self.N, in_ntt=self.in_ntt)
 
     def sub(self, other: "Poly") -> "Poly":
+        """Phép trừ: phải ở cùng domain."""
         self._check_same(other)
-        return Poly([(a - b) % self.q for a, b in zip(self.coeffs, other.coeffs)], self.q, self.N)
+        if self.in_ntt != other.in_ntt:
+            raise ValueError("Cannot subtract polynomials in different domains")
+        result_coeffs = [(a - b) % self.q for a, b in zip(self.coeffs, other.coeffs)]
+        return Poly(result_coeffs, self.q, self.N, in_ntt=self.in_ntt)
 
     def scalar_mul(self, c: int) -> "Poly":
+        """Nhân với scalar: hoạt động ở cả hai domain."""
         c %= self.q
-        return Poly([(c * a) % self.q for a in self.coeffs], self.q, self.N)
+        return Poly([(c * a) % self.q for a in self.coeffs], self.q, self.N, in_ntt=self.in_ntt)
 
     def mul(self, other: "Poly") -> "Poly":
+        """
+        Phép nhân đa thức: Hiện dùng naive O(N^2) do NTT chưa hoàn thiện.
+        
+        TODO: Sửa NTT implementation để đạt O(N log N).
+        Xem NTT_STATUS.md để biết chi tiết.
+        """
+        return self.mul_naive(other)
+        
+        # Code NTT bị comment tạm thời:
+        # self._check_same(other)
+        # a_ntt = self.to_ntt()
+        # b_ntt = other.to_ntt()
+        # c_ntt_coeffs = [(a_ntt.coeffs[i] * b_ntt.coeffs[i]) % self.q for i in range(self.N)]
+        # c_ntt = Poly(c_ntt_coeffs, self.q, self.N, in_ntt=True)
+        # return c_ntt.from_ntt()
+
+    def mul_naive(self, other: "Poly") -> "Poly":
+        """Phép nhân naive O(N^2) - giữ lại để so sánh benchmark."""
         self._check_same(other)
         N, q = self.N, self.q
         out = [0] * N
@@ -112,11 +324,14 @@ class Poly:
                     out[k] = (out[k] + prod) % q
                 else:
                     out[k - N] = (out[k - N] - prod) % q
-        return Poly(out, q, N)
+        return Poly(out, q, N, in_ntt=False)
 
     def to_bytes(self) -> bytes:
+        """Mã hóa mỗi hệ số thành 4 byte little-endian (q < 2^24)."""
+        # Đảm bảo ở coefficient domain trước khi serialize
+        poly_coeff = self.from_ntt() if self.in_ntt else self
         b = bytearray()
-        for c in self.coeffs:
+        for c in poly_coeff.coeffs:
             b.extend(int(c).to_bytes(4, 'little', signed=False))
         return bytes(b)
 
@@ -125,7 +340,7 @@ class Poly:
         if len(data) != 4 * N:
             raise ValueError("Invalid byte length for polynomial")
         coeffs = [int.from_bytes(data[4*i:4*i+4], 'little', signed=False) % q for i in range(N)]
-        return cls(coeffs, q, N)
+        return cls(coeffs, q, N, in_ntt=False)
 
     def get_centered_coeffs(self) -> List[int]:
         """Đưa hệ số về miền đối xứng [-(q-1)/2, (q-1)/2]."""
