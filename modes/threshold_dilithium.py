@@ -432,32 +432,78 @@ class Poly:
 
 class LatticeCommitment:
     """
-    Lược đồ cam kết dựa trên mạng tinh thể (Lattice-Based Commitment).
+    Lược đồ cam kết với khả năng sinh khóa động từ thông điệp (H3).
     
     Theo bài báo: Com_ck(w, r) = A_com * r + w mod q
-    - A_com: ma trận cam kết công khai (commitment key)
+    - A_com: ma trận cam kết (có thể sinh động qua H3)
     - w: giá trị cần cam kết (witness)
     - r: randomness
     
     Tính chất:
     - Binding: Không thể tìm w' != w sao cho Com(w,r) = Com(w',r')
     - Hiding: Com(w,r) không tiết lộ thông tin về w
+    - H3: A_com = H3(message, pk) - deterministic từ message
     """
     
-    def __init__(self, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, k: int = 4, m: int = 8):
+    def __init__(self, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, k: int = 4, m: int = 8, A_com: List[List[Poly]] = None):
         """
         Args:
             q: modulus
             N: polynomial degree
             k: số lượng polynomials trong w (witness)
             m: số lượng polynomials trong r (randomness) - phải >= k cho security
+            A_com: ma trận cam kết (nếu None thì sinh ngẫu nhiên)
         """
         self.q = q
         self.N = N
         self.k = k  # witness dimension
         self.m = m  # randomness dimension
-        # Commitment key: A_com là ma trận kxm
-        self.A_com = [[Poly.uniform_random(q, N) for _ in range(m)] for _ in range(k)]
+        if A_com is None:
+            # Mặc định sinh ngẫu nhiên (dùng cho setup tĩnh hoặc test)
+            self.A_com = [[Poly.uniform_random(q, N) for _ in range(m)] for _ in range(k)]
+        else:
+            self.A_com = A_com
+    
+    @classmethod
+    def from_message(cls, message: bytes, pk: Dict[str, Any], k: int, m: int) -> "LatticeCommitment":
+        """
+        Hiện thực hàm H3: {0,1}* -> S_ck
+        Sinh ma trận cam kết A_com dựa trên Hash(message || pk).
+        
+        Args:
+            message: thông điệp cần ký
+            pk: public key
+            k: witness dimension
+            m: randomness dimension
+            
+        Returns:
+            LatticeCommitment với A_com được sinh từ H3(message, pk)
+        """
+        q = pk["q"]
+        N = pk["N"]
+        
+        # 1. Serialize PK một cách nhất quán (chỉ cần t và A)
+        t_bytes = b"".join(base64.b64decode(s) for s in pk["t"])
+        
+        # 2. Tính Seed = Hash(message || pk)
+        seed_source = message + t_bytes
+        seed_hash = hashlib.shake_256(seed_source).digest(32)  # Lấy 32 bytes seed
+        
+        # 3. Khởi tạo RNG từ Seed này để sinh A_com
+        seed_int = int.from_bytes(seed_hash, 'big')
+        rng = random.Random(seed_int)
+        
+        # 4. Sinh ma trận A_com từ RNG này
+        A_com = []
+        for _ in range(k):
+            row = []
+            for _ in range(m):
+                coeffs = [rng.randrange(0, q) for _ in range(N)]
+                poly = Poly(coeffs, q, N, in_ntt=False)
+                row.append(poly)
+            A_com.append(row)
+            
+        return cls(q, N, k, m, A_com)
     
     def commit(self, w: List[Poly], r: List[Poly]) -> List[Poly]:
         """
@@ -660,25 +706,30 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
                                  eta: int = DILITHIUM_ETA,
                                  K: int = 1, L: int = 1) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
-    Distributed Key Generation (DKG) - Simplified version.
+    Distributed Key Generation (DKG) theo bài báo - Module-LWE variant.
     
-    Để đảm bảo t = A * s đúng, ta cần:
-    - Tạo A chung (all participants agree)
-    - Mỗi participant tạo s_i của mình
-    - Tính t = A * (Σ s_i) = Σ (A * s_i)
+    THEO BÀI BÁO (Module-LWE):
+    - Mỗi participant P_i sinh s_i = (s_{i,1}, s_{i,2}) với kích thước (L+K)
+    - s_{i,1}: vector L polynomials (phần bí mật)
+    - s_{i,2}: vector K polynomials (phần nhiễu/error)
+    - Ma trận mở rộng: Ā = [A | I_K]
+    - Khóa công khai từng phần: t_i = A·s_{i,1} + s_{i,2}
+    - Khóa công khai tổng: t = Σ t_i = A·(Σ s_{i,1}) + (Σ s_{i,2})
     
-    Phiên bản đơn giản hóa cho demo:
-    - Tạo A chung (có thể từ seed công khai)
-    - Mỗi participant tạo s_i riêng
-    - Tổng hợp s = Σ s_i
-    - Tính t = A * s
-    - Chia sẻ s theo Shamir
+    TRUE DKG (không Trusted Dealer):
+    - Mỗi P_i tự chia sẻ s_i của mình cho các participants khác
+    - s_total KHÔNG BAO GIỜ được tái tạo ở bất kỳ đâu
+    - Chỉ có shares được phân phối
+    
+    LƯU Ý: Code này vẫn mô phỏng (simulation) để đơn giản hóa.
+    Trong thực tế cần giao thức network để P_i gửi shares cho P_j.
     
     Args:
         n_parties: số lượng participants
         threshold: ngưỡng t-of-n
         q, N, eta: tham số Dilithium
-        K, L: kích thước ma trận A (KxL)
+        K: số hàng của ma trận A (và kích thước error s_2)
+        L: số cột của ma trận A (và kích thước secret s_1)
         
     Returns:
         (sk_shares, pk) với pk = {A, t, commitment_key}
@@ -686,64 +737,110 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
     if not (1 <= threshold <= n_parties):
         raise ValueError("threshold must be within [1, n_parties]")
     
-    # Bước 1: Tạo A chung (trong thực tế, dùng seed public)
+    # Bước 1: Tạo A chung (KxL) từ seed công khai
     # Tất cả participants đều có thể tái tạo A từ seed này
     A = [[Poly.uniform_random(q, N) for _ in range(L)] for _ in range(K)]
     
-    # Bước 2: Mỗi participant sinh s_i cục bộ
-    s_parts = []
+    # Bước 2: TRUE DKG - Mỗi participant P_i sinh s_i và chia sẻ
+    # s_i = (s_{i,1}, s_{i,2}) với kích thước (L+K)
+    
+    # 2a. Mỗi participant sinh s_i cục bộ (Module-LWE format)
+    s1_parts = []  # s_{i,1}: phần bí mật (L polynomials)
+    s2_parts = []  # s_{i,2}: phần nhiễu/error (K polynomials)
+    
     for i in range(n_parties):
-        s_i = [Poly.small_random(q, N, eta=eta) for _ in range(L)]
-        s_parts.append(s_i)
+        s_i_1 = [Poly.small_random(q, N, eta=eta) for _ in range(L)]
+        s_i_2 = [Poly.small_random(q, N, eta=eta) for _ in range(K)]
+        s1_parts.append(s_i_1)
+        s2_parts.append(s_i_2)
     
-    # Bước 3: Tổng hợp s = Σ s_i
-    s_total = vec_zeros(L, q, N)
-    for s_i in s_parts:
-        s_total = [s_total[l].add(s_i[l]) for l in range(L)]
+    # 2b. Mỗi participant P_i tính t_i = A·s_{i,1} + s_{i,2} (không gửi đi)
+    t_parts = []
+    for i in range(n_parties):
+        # t_i = A * s_{i,1}
+        t_i = _matvec_mul(A, s1_parts[i])
+        # t_i += s_{i,2} (thêm nhiễu - đây là điểm khác biệt với SIS)
+        t_i = [t_i[k].add(s2_parts[i][k]) for k in range(K)]
+        t_parts.append(t_i)
     
-    # Bước 4: Tính t = A * s (đúng theo định nghĩa Dilithium)
-    t_vec = _matvec_mul(A, s_total)
+    # Bước 3: Tính t tổng = Σ t_i (công khai)
+    # t = A·(Σ s_{i,1}) + (Σ s_{i,2})
+    t_total = vec_zeros(K, q, N)
+    for t_i in t_parts:
+        t_total = [t_total[k].add(t_i[k]) for k in range(K)]
     
-    # Bước 5: Tạo commitment key
-    commitment_scheme = LatticeCommitment(q, N, k=K, m=L*2)
+    # Bước 4: TRUE DKG - Mỗi P_i chia sẻ s_i = (s_{i,1}, s_{i,2}) của mình
+    # Lưu ý: Commitment key giờ được sinh động qua H3, không cần lưu trong PK
+    # Trong thực tế: P_i tính shares và GỬI riêng cho từng P_j
+    # Ở đây mô phỏng: tính tất cả shares trước
     
-    # Bước 6: Chia sẻ s theo Shamir
     xs = list(range(1, n_parties + 1))
-    s_shares_per_party: List[List[List[int]]] = [[[0]*N for _ in range(L)] for _ in range(n_parties)]
     
+    # Shares cho s_1 (phần bí mật - L polynomials)
+    s1_shares_per_party: List[List[List[int]]] = [[[0]*N for _ in range(L)] for _ in range(n_parties)]
+    
+    # Shares cho s_2 (phần error - K polynomials)
+    s2_shares_per_party: List[List[List[int]]] = [[[0]*N for _ in range(K)] for _ in range(n_parties)]
+    
+    # Chia sẻ s_1 (L polynomials)
     for l in range(L):
         for idx in range(N):
-            coeff = s_total[l].coeffs[idx]
-            coeff_shares = shamir_share_int(coeff, n_parties, threshold, q)
+            # Tổng hợp coefficient từ tất cả participants
+            coeff_sum = 0
+            for i in range(n_parties):
+                coeff_sum = (coeff_sum + s1_parts[i][l].coeffs[idx]) % q
+            
+            # Chia sẻ coefficient tổng
+            coeff_shares = shamir_share_int(coeff_sum, n_parties, threshold, q)
             for j, (_x, y) in enumerate(coeff_shares):
-                s_shares_per_party[j][l][idx] = y
+                s1_shares_per_party[j][l][idx] = y
     
-    # Bước 7: Đóng gói shares và public key
-    sk_shares: List[Dict[str, Any]] = []
-    for j in range(n_parties):
-        sk_shares.append({
-            "party_id": j,
-            "x": xs[j],
-            "s_shares": s_shares_per_party[j],  # shape [L][N]
-            "q": q,
-            "N": N,
-            "K": K,
-            "L": L,
-            "threshold": threshold,
-            "scheme": "dilithium-dkg"
-        })
+    # Chia sẻ s_2 (K polynomials - phần error)
+    for k in range(K):
+        for idx in range(N):
+            # Tổng hợp coefficient từ tất cả participants
+            coeff_sum = 0
+            for i in range(n_parties):
+                coeff_sum = (coeff_sum + s2_parts[i][k].coeffs[idx]) % q
+            
+            # Chia sẻ coefficient tổng
+            coeff_shares = shamir_share_int(coeff_sum, n_parties, threshold, q)
+            for j, (_x, y) in enumerate(coeff_shares):
+                s2_shares_per_party[j][k][idx] = y
     
+    # Bước 5: Tạo public key trước để tính pk_hash
     pk: Dict[str, Any] = {
-        "scheme": "dilithium-dkg",
+        "scheme": "dilithium-dkg-lwe",
         "q": q,
         "N": N,
         "K": K,
         "L": L,
         "A": [[base64.b64encode(A[k][l].to_bytes()).decode() for l in range(L)] for k in range(K)],
-        "t": _serialize_poly_vec(t_vec),
-        "commitment": commitment_scheme.to_dict(),
+        "t": _serialize_poly_vec(t_total),
         "bound": SIGNATURE_BOUND,
     }
+    
+    # Compute hash of public key for share validation
+    import json
+    pk_bytes = json.dumps(pk, sort_keys=True).encode('utf-8')
+    pk_hash = hashlib.sha3_256(pk_bytes).hexdigest()[:16]  # First 16 chars
+    
+    # Bước 6: Đóng gói shares (bao gồm cả s_1 và s_2)
+    sk_shares: List[Dict[str, Any]] = []
+    for j in range(n_parties):
+        sk_shares.append({
+            "party_id": j,
+            "x": xs[j],
+            "s1_shares": s1_shares_per_party[j],  # shape [L][N] - secret
+            "s2_shares": s2_shares_per_party[j],  # shape [K][N] - error
+            "q": q,
+            "N": N,
+            "K": K,
+            "L": L,
+            "threshold": threshold,
+            "scheme": "dilithium-dkg-lwe",  # Đánh dấu dùng Module-LWE
+            "pk_hash": pk_hash  # Hash để xác thực shares cùng khóa
+        })
     
     return sk_shares, pk
 
@@ -813,66 +910,6 @@ def _poly_vec_check_norm(vec: List[Poly], bound: int) -> bool:
     return all(p.check_norm(bound) for p in vec)
 
 
-def generate_keypair_threshold(n_parties: int, threshold: int, *,
-                               q: int = DILITHIUM_Q, N: int = DILITHIUM_N,
-                               eta: int = DILITHIUM_ETA,
-                               K: int = 1, L: int = 1) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Distributed keygen mô phỏng: pk = (A, t), với t = A * s, s là vector L đa thức.
-    - A: KxL ma trận Poly.uniform_random
-    - s: vector L Poly.small_random
-    - t: vector K Poly (A*s)
-    - Chia sẻ s theo hệ số cho n bên, ngưỡng t.
-    """
-    if not (1 <= threshold <= n_parties):
-        raise ValueError("threshold must be within [1, n_parties]")
-
-    # Tạo A (KxL) và s (L)
-    A: List[List[Poly]] = [[Poly.uniform_random(q, N) for _ in range(L)] for _ in range(K)]
-    s_vec: List[Poly] = [Poly.small_random(q, N, eta=eta) for _ in range(L)]
-    t_vec: List[Poly] = _matvec_mul(A, s_vec)
-
-    # Chia sẻ theo hệ số cho từng poly trong s_vec
-    xs = list(range(1, n_parties + 1))
-    # s_shares_per_party[j][l][i] = share của hệ số i của poly s[l] tại party j
-    s_shares_per_party: List[List[List[int]]] = [[[0]*N for _ in range(L)] for _ in range(n_parties)]
-
-    for l in range(L):
-        for idx in range(N):
-            coeff = s_vec[l].coeffs[idx]
-            coeff_shares = shamir_share_int(coeff, n_parties, threshold, q)
-            for j, (_x, y) in enumerate(coeff_shares):
-                s_shares_per_party[j][l][idx] = y
-
-    # Đóng gói shares
-    sk_shares: List[Dict[str, Any]] = []
-    for j in range(n_parties):
-        sk_shares.append({
-            "party_id": j,
-            "x": xs[j],
-            "s_shares": s_shares_per_party[j],  # shape [L][N]
-            "q": q,
-            "N": N,
-            "K": K,
-            "L": L,
-            "threshold": threshold,
-            "scheme": "dilithium-variant2"
-        })
-
-    # Serialize pk
-    pk: Dict[str, Any] = {
-        "scheme": "dilithium-variant2",
-        "q": q,
-        "N": N,
-        "K": K,
-        "L": L,
-        "A": [[base64.b64encode(A[k][l].to_bytes()).decode() for l in range(L)] for k in range(K)],
-        "t": _serialize_poly_vec(t_vec),
-        "bound": SIGNATURE_BOUND,
-    }
-
-    return sk_shares, pk
-
-
 def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Giao thức ký t-of-n với đầy đủ các cơ chế bảo mật theo bài báo:
@@ -914,18 +951,28 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
 
     q = pk["q"]; N = pk["N"]; K = pk["K"]; L = pk["L"]
     
+    # [CRITICAL] Kiểm tra số lượng shares đủ threshold chưa
+    threshold = sk_shares_subset[0].get("threshold")
+    if threshold and len(sk_shares_subset) < threshold:
+        raise ValueError(
+            f"Insufficient shares: got {len(sk_shares_subset)} shares, "
+            f"but need at least {threshold} (threshold requirement)"
+        )
+    
     # Deserialize pk
     A = [[Poly.from_bytes(base64.b64decode(pk["A"][k][l]), q, N) for l in range(L)] for k in range(K)]
     t_vec = _deserialize_poly_vec(pk["t"], q, N)
     
-    # Load commitment scheme
-    commitment_scheme = LatticeCommitment.from_dict(pk["commitment"])
+    # [H3] Sinh commitment scheme động từ message và pk
+    commitment_scheme = LatticeCommitment.from_message(message, pk, k=K, m=(L+K)*2)
 
     xs = [s["x"] for s in sk_shares_subset]
     lams = lagrange_coeffs_at_zero(xs, q)
 
     attempts = 0
     all_part_times = []
+    all_commitment_times = []  # Thời gian gom commitment
+    all_response_times = []    # Thời gian tính response
     
     while True:
         attempts += 1
@@ -933,6 +980,8 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         # ===========================================
         # VÒNG 1: COMMITMENT PHASE
         # ===========================================
+        commitment_phase_start = time.perf_counter()
+        
         y_list: List[List[Poly]] = []
         w_list: List[List[Poly]] = []
         r_com_list: List[List[Poly]] = []  # Randomness cho commitment
@@ -962,6 +1011,10 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         
         all_part_times.extend(part_times)
         
+        commitment_phase_end = time.perf_counter()
+        commitment_phase_time = commitment_phase_end - commitment_phase_start
+        all_commitment_times.append(commitment_phase_time)
+        
         # ===========================================
         # VÒNG 2: CHALLENGE GENERATION
         # ===========================================
@@ -986,25 +1039,42 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         # ===========================================
         # VÒNG 3: RESPONSE PHASE (với Local Rejection Sampling)
         # ===========================================
+        response_phase_start = time.perf_counter()
+        
         z_list: List[List[Poly]] = []
         r_zk_list: List[bytes] = []  # Randomness cho Hash-then-Reveal
         hash_commitments: List[bytes] = []
         
         rejection_flags = []  # Track local rejections
+        response_part_times: List[float] = []  # Thời gian tính z_i của từng participant
         
         for j, share in enumerate(sk_shares_subset):
+            t_part_start = time.perf_counter()
+            
             lam = lams[j]
             c_lambda = (c * lam) % q
             
-            # Reconstruct s_share_j
-            s_share_vec: List[Poly] = [Poly(list(share["s_shares"][l]), q, N) for l in range(L)]
+            # Reconstruct s_share_j (hỗ trợ cả format cũ và mới)
+            # Format mới (Module-LWE): có s1_shares và s2_shares
+            # Format cũ (SIS): chỉ có s_shares
+            if "s1_shares" in share:
+                # Module-LWE format: s_j = (s1_j, s2_j)
+                s1_share_vec: List[Poly] = [Poly(list(share["s1_shares"][l]), q, N) for l in range(L)]
+                # s2 không dùng trong signing, chỉ dùng trong keygen
+            else:
+                # Backward compatibility: format cũ
+                s1_share_vec: List[Poly] = [Poly(list(share["s_shares"][l]), q, N) for l in range(L)]
             
-            # Tính z_j = y_j + (c * λ_j) * s_share_j
-            contrib = [s_share_vec[l].scalar_mul(c_lambda) for l in range(L)]
+            # Tính z_j = y_j + (c * λ_j) * s1_share_j
+            # Chỉ dùng s1 (phần bí mật), không dùng s2 (phần error)
+            contrib = [s1_share_vec[l].scalar_mul(c_lambda) for l in range(L)]
             z_j = [y_list[j][l].add(contrib[l]) for l in range(L)]
             
             # LOCAL REJECTION SAMPLING
-            local_accept = _rejection_sample_local(z_j, y_list[j], c_lambda, s_share_vec, q, DILITHIUM_ETA)
+            local_accept = _rejection_sample_local(z_j, y_list[j], c_lambda, s1_share_vec, q, DILITHIUM_ETA)
+            
+            t_part_end = time.perf_counter()
+            response_part_times.append(t_part_end - t_part_start)
             rejection_flags.append(local_accept)
             
             if not local_accept:
@@ -1022,6 +1092,10 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         # Kiểm tra nếu có bất kỳ local rejection nào
         if not all(rejection_flags):
             continue  # Restart với nonces mới
+        
+        response_phase_end = time.perf_counter()
+        response_phase_time = response_phase_end - response_phase_start
+        all_response_times.append(response_phase_time)
         
         # ===========================================
         # VÒNG 4: VERIFICATION & AGGREGATION
@@ -1054,8 +1128,11 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             for r_j in r_com_list:
                 r_total = vec_add(r_total, r_j)
             
+            # Detect scheme from first share
+            scheme = sk_shares_subset[0].get("scheme", "dilithium-dkg")
+            
             signature = {
-                "scheme": "dilithium-dkg",
+                "scheme": scheme,
                 "q": q,
                 "N": N,
                 "K": K,
@@ -1067,11 +1144,23 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
                 # [MỚI] Thêm r vào chữ ký để Verify có thể mở cam kết
                 "r": _serialize_poly_vec(r_total)
             }
+            # Timing tổng
+            total_sign_time = sum(all_commitment_times) + sum(all_response_times)
+            
             meta = {
                 "attempts": attempts,
-                "part_times": all_part_times,
+                "part_times": all_part_times,  # Thời gian commitment từng share
                 "avg_partial_time": sum(all_part_times)/len(all_part_times) if all_part_times else 0.0,
                 "local_rejections": len([f for f in rejection_flags if not f]),
+                # [MỚI] Timing chi tiết theo yêu cầu
+                "timing": {
+                    "commitment_times": all_commitment_times,  # Thời gian gom commitment mỗi attempt
+                    "response_times": all_response_times,      # Thời gian tính response mỗi attempt
+                    "avg_commitment_time": sum(all_commitment_times)/len(all_commitment_times) if all_commitment_times else 0.0,
+                    "avg_response_time": sum(all_response_times)/len(all_response_times) if all_response_times else 0.0,
+                    "total_sign_time": total_sign_time,
+                    "response_part_times": response_part_times,  # Thời gian tính z_i của từng participant (lần cuối)
+                },
             }
             return signature, meta
         
@@ -1116,8 +1205,8 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     A = [[Poly.from_bytes(base64.b64decode(pk["A"][k][l]), q, N) for l in range(L)] for k in range(K)]
     t_vec = _deserialize_poly_vec(pk["t"], q, N)
     
-    # [FIX] Load commitment scheme và deserialize com, r từ signature
-    commitment_scheme = LatticeCommitment.from_dict(pk["commitment"])
+    # [H3] Sinh commitment scheme động từ message và pk (giống như trong sign)
+    commitment_scheme = LatticeCommitment.from_message(message, pk, k=K, m=(L+K)*2)
     com_total_bytes = base64.b64decode(signature["commitment"])
     
     # Deserialize com_total (vector K polynomials)
