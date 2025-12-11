@@ -7,9 +7,9 @@
     "L": 1,
     "N_T": "5/3",
     "K_L": "1x1",
-    "Time_s": 0.03669836539775133,
-    "Attempts_Avg": 9.6,
-    "Throughput_sps": 27.249170069609544,
+    "Time_s": 0.13417314374819397,
+    "Attempts_Avg": 40.2,
+    "Throughput_sps": 7.453056342457955,
     "successful_runs": 5
   },
   {
@@ -20,9 +20,9 @@
     "L": 5,
     "N_T": "5/3",
     "K_L": "6x5",
-    "Time_s": 1.8966875361744315,
-    "Attempts_Avg": 20.4,
-    "Throughput_sps": 0.5272349719854086,
+    "Time_s": 1.610588589683175,
+    "Attempts_Avg": 69.0,
+    "Throughput_sps": 0.6208910248126828,
     "successful_runs": 5
   },
   {
@@ -33,9 +33,9 @@
     "L": 1,
     "N_T": "10/6",
     "K_L": "1x1",
-    "Time_s": 0.0969701474532485,
-    "Attempts_Avg": 13.4,
-    "Throughput_sps": 10.312452092352675,
+    "Time_s": 0.7678130300715565,
+    "Attempts_Avg": 115.6,
+    "Throughput_sps": 1.3024004032684946,
     "successful_runs": 5
   },
   {
@@ -46,9 +46,9 @@
     "L": 5,
     "N_T": "10/6",
     "K_L": "6x5",
-    "Time_s": 4.284467702545226,
-    "Attempts_Avg": 23.2,
-    "Throughput_sps": 0.2334012226083397,
+    "Time_s": 6.973451651260257,
+    "Attempts_Avg": 150.0,
+    "Throughput_sps": 0.1434010085693041,
     "successful_runs": 5
   },
   {
@@ -59,9 +59,9 @@
     "L": 1,
     "N_T": "20/13",
     "K_L": "1x1",
-    "Time_s": 0.1625906543340534,
-    "Attempts_Avg": 10.4,
-    "Throughput_sps": 6.150415004453042,
+    "Time_s": 2.513118778541684,
+    "Attempts_Avg": 174.8,
+    "Throughput_sps": 0.39791195248649625,
     "successful_runs": 5
   },
   {
@@ -72,9 +72,9 @@
     "L": 5,
     "N_T": "20/13",
     "K_L": "6x5",
-    "Time_s": 5.5181707922369245,
-    "Attempts_Avg": 13.8,
-    "Throughput_sps": 0.18121947247570164,
+    "Time_s": 29.97169672837481,
+    "Attempts_Avg": 297.6,
+    "Throughput_sps": 0.033364811110386014,
     "successful_runs": 5
   }
 ]

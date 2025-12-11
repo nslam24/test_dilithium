@@ -13,19 +13,42 @@ Endpoints:
 import os
 import sys
 import base64
+import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from threshold_controller import ThresholdController
+# Import from modes directory
+from modes.threshold_dilithium import (
+    generate_keypair_distributed,
+    sign_threshold,
+    verify_threshold
+)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Initialize controller
-controller = ThresholdController(keys_dir="keys")
+
+def convert_numpy_types(obj):
+    """
+    Recursively convert NumPy types to Python native types for JSON serialization.
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_types(item) for item in obj)
+    else:
+        return obj
 
 
 @app.route('/api/health', methods=['GET'])
@@ -104,6 +127,10 @@ def generate_keypair():
             K=K,
             L=L
         )
+        
+        # Convert NumPy types to Python native types
+        sk_shares = convert_numpy_types(sk_shares)
+        pk = convert_numpy_types(pk)
         
         # Encode to base64
         import json
@@ -238,6 +265,10 @@ def sign_message():
         
         total_sign_time = t_total_end - t_total_start
         
+        # Convert NumPy types to Python native types
+        signature = convert_numpy_types(signature)
+        metadata = convert_numpy_types(metadata)
+        
         # Encode signature to base64
         signature_b64 = base64.b64encode(json.dumps(signature).encode('utf-8')).decode('utf-8')
         
@@ -271,9 +302,13 @@ def sign_message():
         })
         
     except Exception as e:
+        import traceback
+        error_traceback = traceback.format_exc()
+        print(f"ERROR in /api/sign: {error_traceback}", file=sys.stderr)
         return jsonify({
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "traceback": error_traceback
         }), 500
 
 
