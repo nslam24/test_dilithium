@@ -906,9 +906,9 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         # Điều này tương thích với Module-LWE (t = A*s1 + s2)
         # Vì w' = A*y - c*s2 ≠ w = A*y khi verify
         # Sử dụng commitment đảm bảo Fiat-Shamir vẫn an toàn
-        # ĐẢM BẢO commitment ở coefficient domain trước khi serialize
-        com_total_coeff = [p.from_ntt() for p in com_total]
-        com_bytes = b"".join(p.to_bytes() for p in com_total_coeff)
+        # [QUAN TRỌNG] com_total đã ở coefficient domain (từ _matvec_mul)
+        # KHÔNG GỌI from_ntt() vì sẽ làm sai dữ liệu!
+        com_bytes = b"".join(p.to_bytes() for p in com_total)
         c = _hash_to_challenge(message, com_bytes, q)
         
         # ===========================================
@@ -1020,8 +1020,8 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
                 "c": c,
                 "z": _serialize_poly_vec(z_vec),
                 "participants": [s["party_id"] for s in sk_shares_subset],
-                # [FIX] Serialize commitment đã được convert về coefficient domain (giống như khi hash)
-                "commitment": base64.b64encode(b"".join(p.to_bytes() for p in com_total_coeff)).decode(),
+                # [FIX] Serialize commitment (đã ở coefficient domain từ _matvec_mul)
+                "commitment": base64.b64encode(b"".join(p.to_bytes() for p in com_total)).decode(),
                 # [MỚI] Thêm r vào chữ ký để Verify có thể mở cam kết
                 "r": _serialize_poly_vec(r_total)
             }
@@ -1117,18 +1117,14 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     # 5. Recompute challenge c' từ COMMITMENT và so sánh với c trong signature
     # [FIX] Challenge phải được tính từ commitment (như trong sign)
     # Không tính từ w' vì trong Module-LWE: w' = A*y - c*s2 ≠ w = A*y
-    # ĐẢM BẢO commitment ở coefficient domain trước khi serialize
-    com_total_coeff = [p.from_ntt() for p in com_total]
-    com_bytes = b"".join(p.to_bytes() for p in com_total_coeff)
+    # [QUAN TRỌNG] com_total đã được deserialize từ coefficient domain
+    # (vì trong sign, ta đã serialize com_total_coeff)
+    # => KHÔNG CẦN convert lại, dùng trực tiếp
+    com_bytes = b"".join(p.to_bytes() for p in com_total)
     c_computed = _hash_to_challenge(message, com_bytes, q)
-    
-    # DEBUG
-    print(f"[VERIFY DEBUG] c_from_sig={c_from_sig}, c_computed={c_computed}, match={c_from_sig == c_computed}", file=sys.stderr)
-    print(f"[VERIFY DEBUG] com_total in_ntt status: {[p.in_ntt for p in com_total]}", file=sys.stderr)
     
     if c_from_sig != c_computed:
         # Challenge không khớp => commitment không đúng => signature invalid
-        print(f"[VERIFY] Challenge mismatch! c_from_sig={c_from_sig}, c_computed={c_computed}", file=sys.stderr)
         t1 = time.perf_counter()
         return False, (t1 - t0)
     
@@ -1141,8 +1137,6 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     #   ✓ norm(z) <= B (đã check)
     #   ✓ c == H(commitment, message) (đã check)
     #   ✓ w' = A*z - c*t (implicit trong công thức trên)
-    
-    print(f"[VERIFY] All checks passed! Signature valid.", file=sys.stderr)
     
     # Tất cả checks passed
     t1 = time.perf_counter()

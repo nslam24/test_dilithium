@@ -37,6 +37,12 @@ help:
 	@echo "  make run           - Run multisig demo"
 	@echo "  make interactive   - Run interactive multisig menu"
 	@echo ""
+	@echo "📊 Benchmark Commands:"
+	@echo "  make benchmark     - Run benchmark (5 runs per config)"
+	@echo "  make benchmark-10  - Run benchmark (10 runs per config)"
+	@echo "  make benchmark-20  - Run benchmark (20 runs per config)"
+	@echo "  make benchmark-full - Run full benchmark (50 runs per config)"
+	@echo ""
 	@echo "🧹 Cleanup:"
 	@echo "  make clean         - Remove signature bundles"
 	@echo "  make clean-all     - Remove bundles + generated files"
@@ -211,6 +217,47 @@ api-b64-test:
 	@bash test_api_b64.sh
 
 # =============================================================================
+# BENCHMARK COMMANDS
+# =============================================================================
+
+benchmark:
+	@echo "📊 Running threshold Dilithium benchmark (5 runs)..."
+	@echo "════════════════════════════════════════════════════════════════════════════════"
+	$(PYTHON) modes/threshold_dilithium.py 5
+	@echo ""
+	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
+
+benchmark-10:
+	@echo "📊 Running threshold Dilithium benchmark (10 runs)..."
+	@echo "════════════════════════════════════════════════════════════════════════════════"
+	$(PYTHON) modes/threshold_dilithium.py 10
+	@echo ""
+	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
+
+benchmark-20:
+	@echo "📊 Running threshold Dilithium benchmark (20 runs)..."
+	@echo "════════════════════════════════════════════════════════════════════════════════"
+	$(PYTHON) modes/threshold_dilithium.py 20
+	@echo ""
+	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
+
+benchmark-full:
+	@echo "📊 Running FULL threshold Dilithium benchmark (50 runs - may take a while)..."
+	@echo "════════════════════════════════════════════════════════════════════════════════"
+	$(PYTHON) modes/threshold_dilithium.py 50
+	@echo ""
+	@echo "✅ Full benchmark completed! Results saved to benchmark_results.json"
+
+benchmark-results:
+	@echo "📈 Benchmark Results:"
+	@echo "════════════════════════════════════════════════════════════════════════════════"
+	@if [ -f benchmark_results.json ]; then \
+		cat benchmark_results.json | $(PYTHON) -m json.tool; \
+	else \
+		echo "❌ No benchmark results found. Run 'make benchmark' first."; \
+	fi
+
+# =============================================================================
 # MULTISIG & KEY GENERATION
 # =============================================================================
 
@@ -246,6 +293,7 @@ clean:
 	@echo "✅ Removed signature bundles and API test files"
 
 clean-all: clean
-	@rm -f $(API_LOG)
-	@rm -f $(PID_FILE)
-	@echo "✅ Removed all generated files"
+	@rm -f $(API_LOG) $(API_B64_LOG)
+	@rm -f $(PID_FILE) $(PID_B64_FILE)
+	@rm -f benchmark_results.json
+	@echo "✅ Removed all generated files (including benchmark results)"
