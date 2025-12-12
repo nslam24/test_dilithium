@@ -1,562 +1,40 @@
 #!/usr/bin/env python3
 """
-threshold_dilithium.py (Biến thể cải tiến - Theo bài báo khoa học)
+threshold_dilithium.py - Threshold Dilithium signature scheme
 
-Cấu trúc tệp (6 phần):
-1) HẰNG SỐ & TIỆN ÍCH: tham số toán học, hàm băm, helpers vector.
-2) LỚP VÀNH (Poly): phép toán R_q = Z_q[X]/(X^N+1) + norm checks.
-3) LATTICE-BASED COMMITMENT SCHEME: Com(w, r) với trapdoor opening.
-4) TIỆN ÍCH MẬT MÃ: Shamir, Lagrange, DKG (Distributed Key Generation).
-5) HASH-THEN-REVEAL: Zero-Knowledge proof đơn giản cho chữ ký thành phần.
-6) LOGIC GIAO THỨC: DKG, sign_threshold (với commitment + ZK), verify_threshold.
+Implements t-of-n threshold signatures using Module-LWE with:
+- Distributed Key Generation (DKG)
+- Lattice-based commitment scheme  
+- Hash-then-Reveal protocol
+- Local rejection sampling
 
-Lưu ý: Sử dụng Numba JIT để tối ưu polynomial multiplication (~15× speedup).
-
-CẢI TIẾN SO VỚI PHIÊN BẢN CŨ:
-✓ Thêm lược đồ cam kết dựa trên mạng tinh thể (Lattice-Based Commitment)
-✓ Thêm quy trình Hash-then-Reveal cho Zero-Knowledge proof
-✓ Thêm Distributed Key Generation (DKG) - không còn Trusted Dealer
-✓ Thêm Local Rejection Sampling theo từng participant
+Core math primitives imported from core.dilithium_math
 """
-from typing import List, Tuple, Dict, Any, Optional
-import hashlib
-import random
+from typing import List, Tuple, Dict, Any
 import time
-import base64
 import sys
-import numpy as np
-from numba import jit
+import base64
+import random
+import hashlib
+
+# Import core mathematical primitives
+from core.dilithium_math import (
+    # Constants
+    DILITHIUM_Q, DILITHIUM_N, DILITHIUM_ETA, SIGNATURE_BOUND,
+    # Classes
+    Poly, LatticeCommitment, HashThenReveal,
+    # Vector operations
+    vec_add, vec_zeros, _matvec_mul,
+    # Serialization
+    _serialize_poly_vec, _deserialize_poly_vec, _poly_vec_check_norm,
+    # Hash functions
+    _hash_to_challenge,
+    # Cryptographic utilities
+    shamir_share_int, lagrange_coeffs_at_zero, _rejection_sample_local
+)
+
 
 # =============================
-# PHẦN 1: HẰNG SỐ & TIỆN ÍCH NTT (TỐI ƯU HÓA JIT)
-# =============================
-DILITHIUM_Q = 8380417
-DILITHIUM_N = 256
-DILITHIUM_ETA = 2
-SIGNATURE_BOUND = 523913
-
-NTT_ROOT = 1753
-NTT_ROOT_INV = pow(NTT_ROOT, -1, DILITHIUM_Q)
-# Nghịch đảo của N modulo Q
-N_INV = 8347669  # pow(256, -1, 8380417)
-
-# Khởi tạo mảng Global Numpy cho Numba truy cập nhanh
-_ZETAS_NP = np.zeros(DILITHIUM_N, dtype=np.int64)
-_ZETAS_INV_NP = np.zeros(DILITHIUM_N, dtype=np.int64)
-
-def _init_ntt_zetas_numpy():
-    """Khởi tạo bảng tra cứu lũy thừa của căn đơn vị"""
-    global _ZETAS_NP, _ZETAS_INV_NP
-    zetas = [0] * DILITHIUM_N
-    zetas_inv = [0] * DILITHIUM_N
-    
-    # Precompute zetas for Cooley-Tukey (Bit-reversed order)
-    for i in range(DILITHIUM_N):
-        br = 0
-        for j in range(8):
-            if i & (1 << j): br |= 1 << (7 - j)
-        
-        exp = (2 * br + 1) % 512
-        zetas[i] = pow(NTT_ROOT, exp, DILITHIUM_Q)
-        
-        exp_inv = (512 - (2 * br + 1)) % 512
-        zetas_inv[i] = pow(NTT_ROOT, exp_inv, DILITHIUM_Q)
-    
-    _ZETAS_NP = np.array(zetas, dtype=np.int64)
-    _ZETAS_INV_NP = np.array(zetas_inv, dtype=np.int64)
-
-# Gọi khởi tạo ngay khi import
-_init_ntt_zetas_numpy()
-
-def _sha3_512(data: bytes) -> bytes:
-    return hashlib.sha3_512(data).digest()
-
-
-# =====================================
-# OPTIMIZED NTT & POLYNOMIAL MULTIPLICATION (Numba JIT)
-# =====================================
-
-@jit(nopython=True, cache=True)
-def ntt_forward_jit(a: np.ndarray) -> np.ndarray:
-    """
-    Biến đổi NTT xuôi (Forward NTT) - Độ phức tạp O(N log N)
-    """
-    N = 256
-    Q = 8380417
-    t = a.copy()
-    
-    len_ = 1
-    k_idx = 0
-    while len_ < N:
-        step = len_ * 2
-        for start in range(0, N, step):
-            zeta = _ZETAS_NP[k_idx]
-            k_idx += 1
-            for j in range(start, start + len_):
-                u = t[j]
-                v = (t[j + len_] * zeta) % Q
-                t[j] = (u + v) % Q
-                t[j + len_] = (u - v) % Q
-        len_ *= 2
-    return t
-
-@jit(nopython=True, cache=True)
-def ntt_inverse_jit(a: np.ndarray) -> np.ndarray:
-    """
-    Biến đổi NTT ngược (Inverse NTT) - Độ phức tạp O(N log N)
-    """
-    N = 256
-    Q = 8380417
-    t = a.copy()
-    
-    len_ = 1
-    k_idx = 0
-    while len_ < N:
-        step = len_ * 2
-        for start in range(0, N, step):
-            zeta = _ZETAS_INV_NP[k_idx]
-            k_idx += 1
-            for j in range(start, start + len_):
-                u = t[j]
-                v = (t[j + len_] * zeta) % Q
-                t[j] = (u + v) % Q
-                t[j + len_] = (u - v) % Q
-        len_ *= 2
-        
-    # Nhân với N^(-1)
-    n_inv_val = 8347669
-    for i in range(N):
-        t[i] = (t[i] * n_inv_val) % Q
-    return t
-
-@jit(nopython=True, cache=True)
-def poly_mul_pointwise_jit(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """
-    Nhân từng điểm (Pointwise Multiplication) trong miền NTT - Độ phức tạp O(N)
-    """
-    Q = 8380417
-    N = 256
-    out = np.zeros(N, dtype=np.int64)
-    for i in range(N):
-        out[i] = (a[i] * b[i]) % Q
-    return out
-
-
-def _hash_to_challenge(message: bytes, w_bytes: bytes, q: int = DILITHIUM_Q) -> int:
-    """Tạo challenge c (scalar mod q) từ message và w (đã serialize).
-    Trong Dilithium thực, c là đa thức thưa; ở đây đơn giản hoá thành scalar.
-    """
-    h = _sha3_512(message + w_bytes)
-    return int.from_bytes(h, 'little') % q
-
-# Helpers cho vector đa thức (danh sách Poly)
-
-def vec_add(a: List["Poly"], b: List["Poly"]) -> List["Poly"]:
-    if len(a) != len(b):
-        raise ValueError("Vector length mismatch")
-    return [ai.add(bi) for ai, bi in zip(a, b)]
-
-
-def vec_zeros(k: int, q: int, N: int) -> List["Poly"]:
-    return [Poly.zeros(q, N) for _ in range(k)]
-
-
-# =====================================
-# PHẦN 2: LỚP TOÁN HỌC VÀNH (Poly)
-# =====================================
-class Poly:
-    def __init__(self, coeffs: Any, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, in_ntt: bool = False):
-        self.q = q
-        self.N = N
-        # Lưu trữ dưới dạng numpy array cho JIT
-        if isinstance(coeffs, np.ndarray):
-            self.coeffs = coeffs
-        else:
-            if len(coeffs) != N:
-                raise ValueError(f"Polynomial length {len(coeffs)} != N={N}")
-            self.coeffs = np.array([c % q for c in coeffs], dtype=np.int64)
-        self.in_ntt = in_ntt  # Trạng thái: True = NTT domain, False = coefficient domain
-
-    @classmethod
-    def zeros(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> "Poly":
-        return cls([0] * N, q, N, in_ntt=False)
-
-    @classmethod
-    def uniform_random(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, rnd: Optional[random.Random] = None) -> "Poly":
-        r = rnd or random
-        return cls([r.randrange(0, q) for _ in range(N)], q, N, in_ntt=False)
-
-    @classmethod
-    def small_random(cls, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, eta: int = DILITHIUM_ETA, rnd: Optional[random.Random] = None) -> "Poly":
-        r = rnd or random
-        coeffs = [r.randint(-eta, eta) % q for _ in range(N)]
-        return cls(coeffs, q, N, in_ntt=False)
-
-    def to_ntt(self) -> "Poly":
-        """Chuyển sang NTT domain (O(N log N))."""
-        if self.in_ntt: return self
-        # Sử dụng hàm JIT đã định nghĩa
-        new_coeffs = ntt_forward_jit(self.coeffs)
-        return Poly(new_coeffs, self.q, self.N, in_ntt=True)
-
-    def from_ntt(self) -> "Poly":
-        """Chuyển về Coefficient domain (O(N log N))."""
-        if not self.in_ntt: return self
-        # Sử dụng hàm JIT đã định nghĩa
-        new_coeffs = ntt_inverse_jit(self.coeffs)
-        return Poly(new_coeffs, self.q, self.N, in_ntt=False)
-
-    def add(self, other: "Poly") -> "Poly":
-        self._check_same(other)
-        if self.in_ntt != other.in_ntt:
-            raise ValueError("Cannot add polynomials in different domains")
-        # Cộng vector thường hoặc cộng vector NTT đều là cộng từng phần tử
-        # Dùng numpy cộng trực tiếp cho nhanh
-        new_coeffs = (self.coeffs + other.coeffs) % self.q
-        return Poly(new_coeffs, self.q, self.N, in_ntt=self.in_ntt)
-
-    def sub(self, other: "Poly") -> "Poly":
-        self._check_same(other)
-        if self.in_ntt != other.in_ntt:
-            raise ValueError("Cannot subtract polynomials in different domains")
-        new_coeffs = (self.coeffs - other.coeffs) % self.q
-        return Poly(new_coeffs, self.q, self.N, in_ntt=self.in_ntt)
-
-    def scalar_mul(self, c: int) -> "Poly":
-        c %= self.q
-        new_coeffs = (self.coeffs * c) % self.q
-        return Poly(new_coeffs, self.q, self.N, in_ntt=self.in_ntt)
-
-    def mul(self, other: "Poly") -> "Poly":
-        """
-        Phép nhân đa thức: Tự động chuyển sang NTT để nhân O(N log N).
-        """
-        self._check_same(other)
-        
-        # 1. Chuyển cả 2 sang NTT (nếu chưa)
-        p1 = self if self.in_ntt else self.to_ntt()
-        p2 = other if other.in_ntt else other.to_ntt()
-        
-        # 2. Nhân pointwise (O(N))
-        prod_coeffs = poly_mul_pointwise_jit(p1.coeffs, p2.coeffs)
-        
-        # 3. Trả về kết quả ở dạng NTT (để có thể cộng dồn tiếp mà không cần convert lại)
-        # Nếu muốn kết quả cuối cùng là coeff, người dùng sẽ gọi .from_ntt()
-        return Poly(prod_coeffs, self.q, self.N, in_ntt=True)
-
-    def to_bytes(self) -> bytes:
-        # Serialize yêu cầu về dạng coefficient
-        p = self.from_ntt()
-        b = bytearray()
-        for c in p.coeffs:
-            b.extend(int(c).to_bytes(4, 'little', signed=False))
-        return bytes(b)
-
-    @classmethod
-    def from_bytes(cls, data: bytes, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> "Poly":
-        # Deserialize trả về dạng coefficient
-        if len(data) != 4 * N:
-            raise ValueError("Invalid byte length for polynomial")
-        coeffs = np.zeros(N, dtype=np.int64)
-        for i in range(N):
-            coeffs[i] = int.from_bytes(data[4*i : 4*i+4], 'little', signed=False) % q
-        return cls(coeffs, q, N, in_ntt=False)
-
-    def get_centered_coeffs(self) -> List[int]:
-        p = self.from_ntt() # Đảm bảo check trên coeff domain
-        half = (self.q - 1) // 2
-        res = []
-        for c in p.coeffs:
-            val = int(c)
-            if val > half: val -= self.q
-            res.append(val)
-        return res
-
-    def check_norm(self, bound: int) -> bool:
-        for v in self.get_centered_coeffs():
-            if abs(v) > bound: return False
-        return True
-
-    def _check_same(self, other: "Poly") -> None:
-        if self.q != other.q or self.N != other.N:
-            raise ValueError("Polynomial mismatch (q or N differ)")
-
-
-# =====================================
-# PHẦN 3: LATTICE-BASED COMMITMENT SCHEME
-# =====================================
-
-class LatticeCommitment:
-    """
-    Lược đồ cam kết với khả năng sinh khóa động từ thông điệp (H3).
-    
-    Theo bài báo: Com_ck(w, r) = A_com * r + w mod q
-    - A_com: ma trận cam kết (có thể sinh động qua H3)
-    - w: giá trị cần cam kết (witness)
-    - r: randomness
-    
-    Tính chất:
-    - Binding: Không thể tìm w' != w sao cho Com(w,r) = Com(w',r')
-    - Hiding: Com(w,r) không tiết lộ thông tin về w
-    - H3: A_com = H3(message, pk) - deterministic từ message
-    """
-    
-    def __init__(self, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, k: int = 4, m: int = 8, A_com: List[List[Poly]] = None):
-        """
-        Args:
-            q: modulus
-            N: polynomial degree
-            k: số lượng polynomials trong w (witness)
-            m: số lượng polynomials trong r (randomness) - phải >= k cho security
-            A_com: ma trận cam kết (nếu None thì sinh ngẫu nhiên)
-        """
-        self.q = q
-        self.N = N
-        self.k = k  # witness dimension
-        self.m = m  # randomness dimension
-        if A_com is None:
-            # Mặc định sinh ngẫu nhiên (dùng cho setup tĩnh hoặc test)
-            self.A_com = [[Poly.uniform_random(q, N) for _ in range(m)] for _ in range(k)]
-        else:
-            self.A_com = A_com
-    
-    @classmethod
-    def from_message(cls, message: bytes, pk: Dict[str, Any], k: int, m: int) -> "LatticeCommitment":
-        """
-        Hiện thực hàm H3: {0,1}* -> S_ck
-        Sinh ma trận cam kết A_com dựa trên Hash(message || pk).
-        
-        Args:
-            message: thông điệp cần ký
-            pk: public key
-            k: witness dimension
-            m: randomness dimension
-            
-        Returns:
-            LatticeCommitment với A_com được sinh từ H3(message, pk)
-        """
-        q = pk["q"]
-        N = pk["N"]
-        
-        # 1. Serialize PK một cách nhất quán (chỉ cần t và A)
-        t_bytes = b"".join(base64.b64decode(s) for s in pk["t"])
-        
-        # 2. Tính Seed = Hash(message || pk)
-        seed_source = message + t_bytes
-        seed_hash = hashlib.shake_256(seed_source).digest(32)  # Lấy 32 bytes seed
-        
-        # 3. Khởi tạo RNG từ Seed này để sinh A_com
-        seed_int = int.from_bytes(seed_hash, 'big')
-        rng = random.Random(seed_int)
-        
-        # 4. Sinh ma trận A_com từ RNG này
-        A_com = []
-        for _ in range(k):
-            row = []
-            for _ in range(m):
-                coeffs = [rng.randrange(0, q) for _ in range(N)]
-                poly = Poly(coeffs, q, N, in_ntt=False)
-                row.append(poly)
-            A_com.append(row)
-            
-        return cls(q, N, k, m, A_com)
-    
-    def commit(self, w: List[Poly], r: List[Poly]) -> List[Poly]:
-        """
-        Tạo cam kết: com = A_com * r + w mod q
-        
-        Args:
-            w: witness vector (k polynomials)
-            r: randomness vector (m polynomials)
-            
-        Returns:
-            commitment vector (k polynomials)
-        """
-        if len(w) != self.k:
-            raise ValueError(f"Witness length {len(w)} != k={self.k}")
-        if len(r) != self.m:
-            raise ValueError(f"Randomness length {len(r)} != m={self.m}")
-        
-        # com = A_com * r
-        com = _matvec_mul(self.A_com, r)
-        
-        # com = com + w
-        com = [com[i].add(w[i]) for i in range(self.k)]
-        
-        return com
-    
-    def open(self, com: List[Poly], w: List[Poly], r: List[Poly]) -> bool:
-        """
-        Kiểm tra cam kết có đúng hay không.
-        
-        Returns:
-            True nếu Com(w, r) == com
-        """
-        expected_com = self.commit(w, r)
-        
-        # So sánh từng polynomial using numpy array comparison
-        for i in range(self.k):
-            if not np.array_equal(expected_com[i].coeffs, com[i].coeffs):
-                return False
-        return True
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize commitment key để chia sẻ giữa các participants."""
-        return {
-            "q": self.q,
-            "N": self.N,
-            "k": self.k,
-            "m": self.m,
-            "A_com": [[base64.b64encode(p.to_bytes()).decode() for p in row] for row in self.A_com]
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LatticeCommitment":
-        """Deserialize commitment key."""
-        obj = cls(data["q"], data["N"], data["k"], data["m"])
-        obj.A_com = [
-            [Poly.from_bytes(base64.b64decode(b), data["q"], data["N"]) 
-             for b in row]
-            for row in data["A_com"]
-        ]
-        return obj
-
-
-# =====================================
-# PHẦN 4: TIỆN ÍCH MẬT MÃ
-# =====================================
-
-def shamir_share_int(secret: int, n: int, t: int, field_prime: int = DILITHIUM_Q) -> List[Tuple[int, int]]:
-    """Chia sẻ một hệ số (Z_q) thành n phần bằng Shamir (t-of-n)."""
-    secret %= field_prime
-    coeffs = [secret] + [random.randint(0, field_prime - 1) for _ in range(t - 1)]
-    shares = []
-    for x in range(1, n + 1):
-        y = 0
-        for i, c in enumerate(coeffs):
-            y = (y + c * pow(x, i, field_prime)) % field_prime
-        shares.append((x, y))
-    return shares
-
-
-def lagrange_coeffs_at_zero(xs: List[int], q: int = DILITHIUM_Q) -> List[int]:
-    """Trọng số Lagrange L_j(0) cho danh sách điểm xs (distinct) trên Z_q."""
-    lams: List[int] = []
-    k = len(xs)
-    for j in range(k):
-        num = 1
-        den = 1
-        xj = xs[j]
-        for m in range(k):
-            if m == j:
-                continue
-            xm = xs[m]
-            num = (num * (-xm % q)) % q
-            den = (den * ((xj - xm) % q)) % q
-        lam = (num * pow(den, -1, q)) % q
-        lams.append(lam)
-    return lams
-
-
-def _rejection_sample_local(z_i: List[Poly], y_i: List[Poly], 
-                            c_lambda: int, s_share_i: List[Poly],
-                            q: int, eta: int = DILITHIUM_ETA) -> bool:
-    """
-    Local Rejection Sampling theo bài báo.
-    
-    Kiểm tra xác suất: min(1, D_eta(z_i) / (M * D_eta^c_lambda*s_i(z_i - c_lambda*s_i)))
-    
-    Đơn giản hóa: Kiểm tra norm của z_i và phân phối Gaussian gần đúng.
-    
-    Args:
-        z_i: chữ ký thành phần của participant i
-        y_i: nonce của participant i
-        c_lambda: c * lambda_i mod q
-        s_share_i: secret share của participant i
-        q: modulus
-        eta: bound for small coefficients
-        
-    Returns:
-        True nếu pass rejection sampling, False nếu reject
-    """
-    # Kiểm tra 1: Norm check đơn giản
-    # |z_i - y_i| nên gần với |c_lambda * s_share_i|
-    for l in range(len(z_i)):
-        for idx in range(z_i[l].N):
-            z_coeff = z_i[l].coeffs[idx]
-            y_coeff = y_i[l].coeffs[idx]
-            s_coeff = s_share_i[l].coeffs[idx]
-            
-            # z_i = y_i + c_lambda * s_share_i
-            # Kiểm tra độ lệch không quá lớn
-            expected = (y_coeff + c_lambda * s_coeff) % q
-            diff = abs(z_coeff - expected)
-            
-            # Nếu diff quá lớn => reject
-            if diff > q // 4:  # Threshold heuristic
-                return False
-    
-    # Kiểm tra 2: Xác suất Gaussian (đơn giản hóa)
-    # Trong thực tế cần implement D_eta distribution đầy đủ
-    # Ở đây dùng xác suất đơn giản: reject với xác suất nhỏ
-    # Tăng M để giảm rejection rate (trong bài báo M ≈ e^12 ≈ 162754)
-    # Để code chạy nhanh hơn, dùng M nhỏ hơn
-    import random
-    M = 1.5  # Rejection sampling parameter (giảm từ 2.0 để tăng acceptance rate)
-    prob_accept = 1.0 / M
-    
-    return random.random() < prob_accept
-
-
-# =====================================
-# PHẦN 5: HASH-THEN-REVEAL PROTOCOL
-# =====================================
-
-class HashThenReveal:
-    """
-    Giao thức Hash-then-Reveal để ngăn chặn việc sửa đổi chữ ký sau khi 
-    nhìn thấy chữ ký của người khác.
-    
-    Quy trình:
-    1. Tính z_i, r_i
-    2. Gửi h_i = H(z_i || r_i) cho các participants khác
-    3. Nhận tất cả h_j từ người khác
-    4. Gửi (z_i, r_i) thật
-    5. Người nhận kiểm tra H(z_j || r_j) == h_j đã nhận trước đó
-    """
-    
-    @staticmethod
-    def hash_commitment(z_vec: List[Poly], r_nonce: bytes) -> bytes:
-        """
-        Tính hash của (z_vec, r_nonce).
-        
-        Args:
-            z_vec: vector chữ ký thành phần
-            r_nonce: randomness cho ZK proof
-            
-        Returns:
-            hash commitment (64 bytes từ SHA3-512)
-        """
-        z_bytes = b"".join(p.to_bytes() for p in z_vec)
-        return _sha3_512(z_bytes + r_nonce)
-    
-    @staticmethod
-    def verify_reveal(z_vec: List[Poly], r_nonce: bytes, 
-                     hash_commitment: bytes) -> bool:
-        """
-        Kiểm tra xem (z_vec, r_nonce) có khớp với hash commitment không.
-        
-        Returns:
-            True nếu khớp, False nếu không khớp (có thể là cheating)
-        """
-        expected_hash = HashThenReveal.hash_commitment(z_vec, r_nonce)
-        return expected_hash == hash_commitment
-
-
-# =====================================
-# PHẦN 6: DISTRIBUTED KEY GENERATION (DKG)
-# =====================================
-
 def generate_keypair_distributed(n_parties: int, threshold: int, *,
                                  q: int = DILITHIUM_Q, N: int = DILITHIUM_N,
                                  eta: int = DILITHIUM_ETA,
@@ -617,7 +95,7 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
         t_i = _matvec_mul(A, s1_parts[i])
         # t_i += s_{i,2} (thêm nhiễu - đây là điểm khác biệt với SIS)
         t_i = [t_i[k].add(s2_parts[i][k]) for k in range(K)]
-        t_parts.append(t_i)
+        t_parts.append(t_i) 
     
     # Bước 3: Tính t tổng = Σ t_i (công khai)
     # t = A·(Σ s_{i,1}) + (Σ s_{i,2})
@@ -626,7 +104,7 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
         t_total = [t_total[k].add(t_i[k]) for k in range(K)]
     
     # Bước 4: TRUE DKG - Mỗi P_i chia sẻ s_i = (s_{i,1}, s_{i,2}) của mình
-    # Lưu ý: Commitment key giờ được sinh động qua H3, không cần lưu trong PK
+    # Lưu ý: Commitment key được sinh động qua H3,
     # Trong thực tế: P_i tính shares và GỬI riêng cho từng P_j
     # Ở đây mô phỏng: tính tất cả shares trước
     
@@ -732,54 +210,9 @@ def lagrange_coeffs_at_zero(xs: List[int], q: int = DILITHIUM_Q) -> List[int]:
 
 
 # =====================================
-# PHẦN 4: LOGIC GIAO THỨC (API)
-# =====================================
-
-def _matvec_mul(A: List[List[Poly]], vec: List[Poly]) -> List[Poly]:
-    """
-    Nhân ma trận đa thức: Tối ưu hóa bằng cách chuyển sang NTT.
-    Input: A (KxL), vec (L)
-    Output: vec (K)
-    """
-    K = len(A)
-    if K == 0: return []
-    L = len(A[0])
-    if len(vec) != L:
-        raise ValueError("Dimension mismatch for matvec_mul")
-    q = vec[0].q
-    N = vec[0].N
-    
-    # 1. Chuyển vector đầu vào sang NTT (chỉ làm 1 lần)
-    vec_ntt = [v.to_ntt() for v in vec]
-    
-    out = []
-    for k in range(K):
-        acc_coeffs = np.zeros(N, dtype=np.int64)
-        for l in range(L):
-            # Chuyển phần tử ma trận sang NTT (nếu chưa)
-            a_ntt = A[k][l].to_ntt()
-            
-            # Nhân tích lũy trong miền NTT (Cực nhanh)
-            prod = poly_mul_pointwise_jit(a_ntt.coeffs, vec_ntt[l].coeffs)
-            acc_coeffs = (acc_coeffs + prod) % q
-            
-        # Chỉ Inverse NTT một lần duy nhất cho kết quả của hàng
-        res = Poly(acc_coeffs, q, N, in_ntt=True).from_ntt()
-        out.append(res)
-    return out
-
-
-def _serialize_poly_vec(vec: List[Poly]) -> List[str]:
-    return [base64.b64encode(p.to_bytes()).decode() for p in vec]
-
-
-def _deserialize_poly_vec(data: List[str], q: int, N: int) -> List[Poly]:
-    return [Poly.from_bytes(base64.b64decode(b), q, N) for b in data]
-
-
-def _poly_vec_check_norm(vec: List[Poly], bound: int) -> bool:
-    return all(p.check_norm(bound) for p in vec)
-
+# =============================
+# THRESHOLD SIGNING & VERIFICATION
+# =============================
 
 def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -902,7 +335,7 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         for wj in w_list:
             w_vec = vec_add(w_vec, wj)
         
-        # [FIX] Tính challenge từ COMMITMENT thay vì từ w
+        # Tính challenge từ COMMITMENT 
         # Điều này tương thích với Module-LWE (t = A*s1 + s2)
         # Vì w' = A*y - c*s2 ≠ w = A*y khi verify
         # Sử dụng commitment đảm bảo Fiat-Shamir vẫn an toàn

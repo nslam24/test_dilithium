@@ -223,28 +223,28 @@ api-b64-test:
 benchmark:
 	@echo "📊 Running threshold Dilithium benchmark (5 runs)..."
 	@echo "════════════════════════════════════════════════════════════════════════════════"
-	$(PYTHON) modes/threshold_dilithium.py 5
+	cd /home/lamns/python && PYTHONPATH=/home/lamns/python $(PYTHON) modes/threshold_dilithium.py 5
 	@echo ""
 	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
 
 benchmark-10:
 	@echo "📊 Running threshold Dilithium benchmark (10 runs)..."
-	@echo "════════════════════════════════════════════════════════════════════════════════"
-	$(PYTHON) modes/threshold_dilithium.py 10
+	@echo "═══════════════════════════════════════════════════════════════════════════════="
+	cd /home/lamns/python && PYTHONPATH=/home/lamns/python $(PYTHON) modes/threshold_dilithium.py 10
 	@echo ""
 	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
 
 benchmark-20:
 	@echo "📊 Running threshold Dilithium benchmark (20 runs)..."
-	@echo "════════════════════════════════════════════════════════════════════════════════"
-	$(PYTHON) modes/threshold_dilithium.py 20
+	@echo "═══════════════════════════════════════════════════════════════════════════════="
+	cd /home/lamns/python && PYTHONPATH=/home/lamns/python $(PYTHON) modes/threshold_dilithium.py 20
 	@echo ""
 	@echo "✅ Benchmark completed! Results saved to benchmark_results.json"
 
 benchmark-full:
 	@echo "📊 Running FULL threshold Dilithium benchmark (50 runs - may take a while)..."
-	@echo "════════════════════════════════════════════════════════════════════════════════"
-	$(PYTHON) modes/threshold_dilithium.py 50
+	@echo "═══════════════════════════════════════════════════════════════════════════════="
+	cd /home/lamns/python && PYTHONPATH=/home/lamns/python $(PYTHON) modes/threshold_dilithium.py 50
 	@echo ""
 	@echo "✅ Full benchmark completed! Results saved to benchmark_results.json"
 
