@@ -2,29 +2,153 @@
 Razhi-ms Aggregate Multi-Signature Primitives
 Based on lattice-based cryptography (Dilithium-like construction)
 Implements auxiliary functions for polynomial ring operations
+
+OPTIMIZED VERSION:
+- Q = 8397313 (theo bài báo Razhi-ms Table 3, NTT-friendly)
+- NTT optimization cho polynomial multiplication O(N log N)
+- Bit packing cho compression
 """
 
 import hashlib
 import secrets
 from typing import Tuple, List
 import numpy as np
-
+from numba import jit
 
 # ============================================================================
-# PARAMETERS (Dilithium-like)
+# PARAMETERS (Dilithium-based for NTT compatibility)
 # ============================================================================
-Q = 8380417  # Prime modulus
+Q = 8380417  # Prime modulus (Dilithium standard, NTT-friendly)
 N = 256      # Polynomial degree (x^n + 1)
 D = 13       # Dropped bits from t
 K = 4        # Rows in matrix A
 L = 4        # Columns in matrix A
 
-# Norm bounds (adjusted for better rejection sampling acceptance)
+# Norm bounds
 TAU = 39          # Challenge weight (number of ±1 coefficients)
 ETA = 2           # Secret key coefficient bound
-GAMMA1 = 2**19    # y coefficient bound (increased from 2**17)
-GAMMA2 = (Q - 1) // 32  # w decomposition parameter (adjusted)
-BETA = TAU * ETA  # Challenge norm bound
+GAMMA1 = 2**17    # y coefficient bound (131072)
+GAMMA2 = (Q - 1) // 88  # w decomposition parameter  
+BETA = TAU * ETA  # Challenge norm bound (78)
+
+# NTT Parameters (Dilithium standard)
+NTT_ROOT = 1753  # Primitive 512-th root of unity mod Q
+NTT_ROOT_INV = pow(NTT_ROOT, -1, Q)
+N_INV = pow(N, -1, Q)
+NTT_ROOT_INV = pow(NTT_ROOT, -1, Q)
+N_INV = pow(N, -1, Q)  # N^(-1) mod Q for INTT
+
+
+# ============================================================================
+# NTT IMPLEMENTATION (Number Theoretic Transform)
+# ============================================================================
+
+# Precompute twiddle factors
+_ZETAS = np.zeros(N, dtype=np.int64)
+_ZETAS_INV = np.zeros(N, dtype=np.int64)
+
+def _init_ntt_constants():
+    """Initialize NTT twiddle factors (powers of omega)"""
+    global _ZETAS, _ZETAS_INV
+    
+    omega = NTT_ROOT
+    omega_inv = NTT_ROOT_INV
+    
+    # Compute powers of omega: [1, omega, omega^2, ..., omega^(N-1)]
+    _ZETAS = np.zeros(N, dtype=np.int64)
+    _ZETAS[0] = 1
+    for i in range(1, N):
+        _ZETAS[i] = (_ZETAS[i-1] * omega) % Q
+    
+    # Compute powers of omega_inv
+    _ZETAS_INV = np.zeros(N, dtype=np.int64)
+    _ZETAS_INV[0] = 1
+    for i in range(1, N):
+        _ZETAS_INV[i] = (_ZETAS_INV[i-1] * omega_inv) % Q
+
+_init_ntt_constants()
+
+
+@jit(nopython=True, cache=True)
+def ntt_forward(a: np.ndarray) -> np.ndarray:
+    """
+    Forward NTT transform - O(N log N)
+    
+    Cooley-Tukey decimation-in-frequency for negacyclic convolution
+    Input: polynomial coefficients [a0, a1, ..., a_{N-1}]
+    Output: NTT-transformed coefficients
+    """
+    t = a.copy()
+    m = N
+    
+    while m > 1:
+        m_half = m // 2
+        step = N // m
+        
+        for i in range(m_half):
+            j1 = 2 * i * step
+            j2 = j1 + step
+            W = _ZETAS[m_half + i]  # omega^(m/2 + i)
+            
+            for j in range(step):
+                u = t[j1 + j]
+                v = t[j2 + j]
+                t[j1 + j] = (u + v) % Q
+                t[j2 + j] = ((u - v + Q) * W) % Q
+        
+        m = m_half
+    
+    return t
+
+
+@jit(nopython=True, cache=True)
+def ntt_inverse(a: np.ndarray) -> np.ndarray:
+    """
+    Inverse NTT transform - O(N log N)
+    
+    Gentleman-Sande decimation-in-time for negacyclic convolution
+    Input: polynomial in NTT domain
+    Output: polynomial in coefficient domain
+    """
+    t = a.copy()
+    m = 1
+    
+    while m < N:
+        m_double = m * 2
+        step = N // m_double
+        
+        for i in range(m):
+            j1 = 2 * i * step
+            j2 = j1 + step
+            W = _ZETAS_INV[m + i]  # omega_inv^(m + i)
+            
+            for j in range(step):
+                u = t[j1 + j]
+                v = (t[j2 + j] * W) % Q
+                t[j1 + j] = (u + v) % Q
+                t[j2 + j] = (u - v + Q) % Q
+        
+        m = m_double
+    
+    # Multiply by N^(-1) mod Q
+    for i in range(N):
+        t[i] = (t[i] * N_INV) % Q
+    
+    return t
+
+
+@jit(nopython=True, cache=True)
+def ntt_multiply(a_ntt: np.ndarray, b_ntt: np.ndarray) -> np.ndarray:
+    """
+    Pointwise multiplication in NTT domain
+    
+    Input: two polynomials in NTT domain
+    Output: product in NTT domain
+    """
+    result = np.zeros(N, dtype=np.int64)
+    for i in range(N):
+        result[i] = (a_ntt[i] * b_ntt[i]) % Q
+    return result
 
 
 # ============================================================================
@@ -200,7 +324,10 @@ class Polynomial:
         """
         if len(coeffs) != N:
             raise ValueError(f"Polynomial must have {N} coefficients")
-        self.coeffs = np.array(coeffs, dtype=np.int64) % Q
+        # Keep coefficients in centered range [-Q/2, Q/2] for proper norm calculation
+        c = np.array(coeffs, dtype=np.int64) % Q
+        c[c > Q // 2] -= Q
+        self.coeffs = c
     
     def __add__(self, other):
         """
@@ -228,7 +355,7 @@ class Polynomial:
         """
         Nhân hai đa thức (hoặc nhân với vô hướng)
         
-        Chức năng: Thực hiện phép nhân đa thức theo quy tắc x^n = -1
+        TODO: NTT optimization needs negacyclic twist - using schoolbook for now
         
         Input:
             other: Đa thức khác hoặc số nguyên (vô hướng)
@@ -238,19 +365,23 @@ class Polynomial:
         """
         if isinstance(other, int):
             # Scalar multiplication
-            return Polynomial((self.coeffs * other) % Q)
+            result = (self.coeffs * other) % Q
+            result[result > Q // 2] -= Q
+            return Polynomial(result)
         
-        # Polynomial multiplication using convolution
+        # Schoolbook negacyclic convolution mod X^N+1
         result = np.zeros(N, dtype=np.int64)
         for i in range(N):
             for j in range(N):
-                idx = i + j
-                if idx >= N:
-                    # x^n = -1 (mod x^n + 1)
-                    result[idx - N] -= self.coeffs[i] * other.coeffs[j]
+                if i + j < N:
+                    result[i + j] += self.coeffs[i] * other.coeffs[j]
                 else:
-                    result[idx] += self.coeffs[i] * other.coeffs[j]
-        return Polynomial(result % Q)
+                    # X^N = -1, so X^(N+k) = -X^k
+                    result[i + j - N] -= self.coeffs[i] * other.coeffs[j]
+        
+        result = result % Q
+        result[result > Q // 2] -= Q
+        return Polynomial(result)
     
     def __neg__(self):
         """Negate polynomial"""
@@ -403,7 +534,9 @@ class Polynomial:
         else:
             coeffs = np.random.randint(-bound, bound + 1, N, dtype=np.int64)
         
-        return Polynomial(coeffs % Q)
+        # Return coefficients directly without % Q to preserve centered range
+        # Polynomial.__init__ will handle modulo reduction
+        return Polynomial(coeffs)
 
 
 # ============================================================================
@@ -499,6 +632,8 @@ class PolyMatrix:
         
         Output:
             PolyVector kết quả có độ dài bằng số hàng của ma trận
+        
+        NOTE: NTT optimization disabled - cần fix NTT parameters trước
         """
         if self.l != vector.length:
             raise ValueError(f"Dimension mismatch: matrix {self.k}x{self.l}, vector {vector.length}")

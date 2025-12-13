@@ -132,6 +132,9 @@ class SignerState:
         self.r_i: Optional[PolyVector] = None
         self.e_prime_i: Optional[PolyVector] = None
         self.e_double_prime_i: Optional[Polynomial] = None
+        
+        # Received shares from other signers (for decryption)
+        self.received_shares: Dict[int, Dict] = {}
 
 
 def phase1_local_computation(
@@ -621,3 +624,112 @@ def signature_from_json(json_str: str) -> Tuple[bytes, bytes, bytes]:
         base64.b64decode(data['c']),
         base64.b64decode(data['b'])
     )
+
+
+# ============================================================================
+# BENCHMARK
+# ============================================================================
+
+def run_benchmark(num_runs: int = 10, max_signers: int = 10) -> None:
+    """
+    Chạy benchmark cho Razhi-ms aggregate multi-signature scheme
+    
+    Đo lường:
+        - Thời gian setup & keygen
+        - Thời gian ký (sign) với số lượng signers khác nhau
+        - Thời gian xác thực (verify)
+        - Kích thước chữ ký
+        - Tỷ lệ rejection sampling
+    
+    Args:
+        num_runs: Số lần chạy để tính trung bình
+        max_signers: Số lượng signers tối đa để test
+    """
+    import time
+    import statistics
+    
+    print("\n" + "="*100)
+    print("[BENCHMARK RAZHI-MS AGGREGATE MULTI-SIGNATURE]")
+    print("="*100)
+    print(f"Tham số: Q={Q}, N={N}, K={K}, L={L}, ETA={ETA}")
+    print(f"Giới hạn: GAMMA1={GAMMA1}, GAMMA2={GAMMA2}, BETA={BETA}, TAU={TAU}")
+    print(f"Số lần chạy mỗi test: {num_runs}")
+    print("="*100)
+    
+    # Test với số lượng signers khác nhau
+    signer_counts = [2, 3, 5, max_signers]
+    
+    print("\n{:<15} {:<15} {:<15} {:<15} {:<20}".format(
+        "N_SIGNERS", "SETUP (ms)", "SIGN (ms)", "VERIFY (ms)", "SIG_SIZE (bytes)"))
+    print("-"*100)
+    
+    for n_signers in signer_counts:
+        if n_signers > max_signers:
+            continue
+            
+        setup_times = []
+        sign_times = []
+        verify_times = []
+        sig_sizes = []
+        
+        for run in range(num_runs):
+            # Setup & Keygen
+            t0 = time.perf_counter()
+            rho, public_keys, secret_keys = setup_and_keygen(n_signers)
+            t1 = time.perf_counter()
+            setup_times.append((t1 - t0) * 1000)  # Convert to ms
+            
+            # Sign
+            message = f"Benchmark message {run}".encode()
+            signers = list(range(n_signers))
+            
+            t0 = time.perf_counter()
+            signature = sign_aggregate(message, rho, signers, public_keys, secret_keys)
+            t1 = time.perf_counter()
+            sign_times.append((t1 - t0) * 1000)
+            
+            # Verify
+            t0 = time.perf_counter()
+            is_valid = verify(message, signature, rho)
+            t1 = time.perf_counter()
+            verify_times.append((t1 - t0) * 1000)
+            
+            if not is_valid:
+                print(f"  [WARNING] Verification failed for run {run}")
+            
+            # Signature size
+            z, c, b = signature
+            sig_size = len(z) + len(c) + len(b)
+            sig_sizes.append(sig_size)
+        
+        # Calculate statistics
+        avg_setup = statistics.mean(setup_times)
+        avg_sign = statistics.mean(sign_times)
+        avg_verify = statistics.mean(verify_times)
+        avg_size = statistics.mean(sig_sizes)
+        
+        print("{:<15} {:<15.2f} {:<15.2f} {:<15.2f} {:<20.0f}".format(
+            n_signers, avg_setup, avg_sign, avg_verify, avg_size))
+    
+    print("-"*100)
+    print("\n[PHÂN TÍCH]")
+    print("• Signature size không đổi theo số signers (tính chất aggregate)")
+    print("• Sign time tăng tuyến tính với số signers")
+    print("• Verify time gần như không đổi (chỉ verify 1 lần cho n người)")
+    print("="*100)
+
+
+if __name__ == '__main__':
+    import sys
+    
+    # Parse arguments
+    num_runs = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+    max_signers = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    
+    print("\n[RAZHI-MS BENCHMARK TEST]")
+    print(f"Configuration: {num_runs} runs, max {max_signers} signers")
+    
+    # Run benchmark
+    run_benchmark(num_runs=num_runs, max_signers=max_signers)
+    
+    print("\n✓ Benchmark hoàn thành")

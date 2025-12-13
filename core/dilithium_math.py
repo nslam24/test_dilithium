@@ -458,7 +458,7 @@ class LatticeCommitment:
         
         # Compare each polynomial using numpy array comparison
         for i in range(self.k):
-            if not np.array_equal(expected_com[i].coeffs, com[i].coeffs):
+            if not np.array_equal(expected_com[i].coeffs, com[ic].oeffs):
                 return False
         return True
     
