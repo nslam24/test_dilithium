@@ -7,9 +7,9 @@
     "L": 1,
     "N_T": "5/3",
     "K_L": "1x1",
-    "Time_s": 0.1981285952962935,
-    "Attempts_Avg": 58.0,
-    "Throughput_sps": 5.047227021947737,
+    "Time_s": 0.015783431939780712,
+    "Attempts_Avg": 3.4,
+    "Throughput_sps": 63.357576718127476,
     "successful_runs": 5
   },
   {
@@ -20,9 +20,9 @@
     "L": 5,
     "N_T": "5/3",
     "K_L": "6x5",
-    "Time_s": 2.469149910006672,
-    "Attempts_Avg": 105.0,
-    "Throughput_sps": 0.40499768602437664,
+    "Time_s": 0.08646346293389798,
+    "Attempts_Avg": 1.8,
+    "Throughput_sps": 11.565578870748077,
     "successful_runs": 5
   },
   {
@@ -33,9 +33,9 @@
     "L": 1,
     "N_T": "10/6",
     "K_L": "1x1",
-    "Time_s": 1.8778471291065215,
-    "Attempts_Avg": 281.4,
-    "Throughput_sps": 0.5325247111439787,
+    "Time_s": 0.09264759430661798,
+    "Attempts_Avg": 10.4,
+    "Throughput_sps": 10.79358840868001,
     "successful_runs": 5
   },
   {
@@ -46,35 +46,9 @@
     "L": 5,
     "N_T": "10/6",
     "K_L": "6x5",
-    "Time_s": 3.4157165007665755,
-    "Attempts_Avg": 72.8,
-    "Throughput_sps": 0.29276434381353783,
-    "successful_runs": 5
-  },
-  {
-    "label": "Toy (Baseline)",
-    "N": 20,
-    "T": 13,
-    "K": 1,
-    "L": 1,
-    "N_T": "20/13",
-    "K_L": "1x1",
-    "Time_s": 1.5582561383023859,
-    "Attempts_Avg": 107.2,
-    "Throughput_sps": 0.6417430199180425,
-    "successful_runs": 5
-  },
-  {
-    "label": "Dilithium 3 (Real K,L)",
-    "N": 20,
-    "T": 13,
-    "K": 6,
-    "L": 5,
-    "N_T": "20/13",
-    "K_L": "6x5",
-    "Time_s": 11.006504178699107,
-    "Attempts_Avg": 108.0,
-    "Throughput_sps": 0.09085536913121793,
+    "Time_s": 1.1010534280911088,
+    "Attempts_Avg": 11.6,
+    "Throughput_sps": 0.9082211403071468,
     "successful_runs": 5
   }
 ]

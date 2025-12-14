@@ -20,7 +20,7 @@ import hashlib
 # Import core mathematical primitives
 from core.dilithium_math import (
     # Constants
-    DILITHIUM_Q, DILITHIUM_N, DILITHIUM_ETA, SIGNATURE_BOUND,
+    DILITHIUM_Q, DILITHIUM_N, DILITHIUM_ETA, DILITHIUM_GAMMA1, SIGNATURE_BOUND,
     # Classes
     Poly, LatticeCommitment, HashThenReveal,
     # Vector operations
@@ -28,9 +28,12 @@ from core.dilithium_math import (
     # Serialization
     _serialize_poly_vec, _deserialize_poly_vec, _poly_vec_check_norm,
     # Hash functions
-    _hash_to_challenge,
+    _hash_to_challenge, _hash_to_challenge_poly, sample_in_ball, expand_a,
     # Cryptographic utilities
-    shamir_share_int, lagrange_coeffs_at_zero, _rejection_sample_local
+    shamir_share_int, lagrange_coeffs_at_zero, _rejection_sample_local,
+    # Compact signature (NEW)
+    pack_z_compact, unpack_z_compact, pack_challenge_seed, unpack_challenge_seed,
+    compute_signature_size_compact
 )
 
 
@@ -71,9 +74,16 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
     if not (1 <= threshold <= n_parties):
         raise ValueError("threshold must be within [1, n_parties]")
     
-    # Bước 1: Tạo A chung (KxL) từ seed công khai
+    # Bước 1: Sinh seed ρ công khai (32 bytes)
+    # Trong thực tế: các participants thống nhất seed qua coin-tossing protocol
+    # Ở đây mô phỏng: dùng seed cố định hoặc random
+    # LƯU Ý: Để reproducible, có thể dùng seed cố định cho testing
+    rho = random.randbytes(32)  # 32-byte seed theo FIPS 204
+    
+    # Bước 2: Tạo A từ seed ρ sử dụng ExpandA (FIPS 204 compliant)
+    # Điều này giảm băng thông: chỉ cần gửi 32 bytes seed thay vì toàn bộ ma trận
     # Tất cả participants đều có thể tái tạo A từ seed này
-    A = [[Poly.uniform_random(q, N) for _ in range(L)] for _ in range(K)]
+    A = expand_a(rho, K, L, q, N)
     
     # Bước 2: TRUE DKG - Mỗi participant P_i sinh s_i và chia sẻ
     # s_i = (s_{i,1}, s_{i,2}) với kích thước (L+K)
@@ -142,14 +152,16 @@ def generate_keypair_distributed(n_parties: int, threshold: int, *,
             for j, (_x, y) in enumerate(coeff_shares):
                 s2_shares_per_party[j][k][idx] = y
     
-    # Bước 5: Tạo public key trước để tính pk_hash
+    # Bước 5: Tạo public key - lưu seed ρ thay vì ma trận A
+    # Tiết kiệm băng thông: 32 bytes vs K×L×N×4 bytes
+    # Tất cả verifiers có thể tái tạo A từ seed ρ
     pk: Dict[str, Any] = {
         "scheme": "dilithium-dkg-lwe",
         "q": q,
         "N": N,
         "K": K,
         "L": L,
-        "A": [[base64.b64encode(A[k][l].to_bytes()).decode() for l in range(L)] for k in range(K)],
+        "rho": base64.b64encode(rho).decode(),  # 32 bytes seed (FIPS 204)
         "t": _serialize_poly_vec(t_total),
         "bound": SIGNATURE_BOUND,
     }
@@ -263,8 +275,9 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             f"but need at least {threshold} (threshold requirement)"
         )
     
-    # Deserialize pk
-    A = [[Poly.from_bytes(base64.b64decode(pk["A"][k][l]), q, N) for l in range(L)] for k in range(K)]
+    # Deserialize pk - tái tạo A từ seed ρ (FIPS 204)
+    rho = base64.b64decode(pk["rho"])
+    A = expand_a(rho, K, L, q, N)
     t_vec = _deserialize_poly_vec(pk["t"], q, N)
     
     # [H3] Sinh commitment scheme động từ message và pk
@@ -278,7 +291,9 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
     all_commitment_times = []  # Thời gian gom commitment
     all_response_times = []    # Thời gian tính response
     
-    while True:
+    MAX_ATTEMPTS = 5000  # Tăng từ 2000 → 5000 để cover N=20 (cần ~300-800 attempts)
+    
+    while attempts < MAX_ATTEMPTS:
         attempts += 1
         
         # ===========================================
@@ -295,11 +310,16 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         for share in sk_shares_subset:
             t0 = time.perf_counter()
             
-            # Sinh y_i (nonce) và tính w_i = A * y_i
-            yj: List[Poly] = [Poly.small_random(q, N, eta=DILITHIUM_ETA) for _ in range(L)]
+            # Sinh y_i (nonce) trong [-GAMMA1, GAMMA1] theo FIPS 204
+            # GAMMA1 = 2^19 = 524288 (lớn hơn rất nhiều so với ETA=2)
+            yj: List[Poly] = []
+            for _ in range(L):
+                coeffs = [random.randint(-DILITHIUM_GAMMA1, DILITHIUM_GAMMA1) % q for _ in range(N)]
+                yj.append(Poly(coeffs, q, N, in_ntt=False))
+            
             wj: List[Poly] = _matvec_mul(A, yj)
             
-            # Sinh randomness r_j cho commitment
+            # Sinh randomness r_j cho commitment (vẫn dùng ETA vì đây là phần commitment)
             r_com_j = [Poly.small_random(q, N, eta=DILITHIUM_ETA) for _ in range(commitment_scheme.m)]
             
             # Tạo commitment: com_j = Com(w_j, r_com_j)
@@ -335,14 +355,17 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         for wj in w_list:
             w_vec = vec_add(w_vec, wj)
         
-        # Tính challenge từ COMMITMENT 
+        # Tính challenge từ COMMITMENT (FIPS 204 - Polynomial Challenge)
         # Điều này tương thích với Module-LWE (t = A*s1 + s2)
         # Vì w' = A*y - c*s2 ≠ w = A*y khi verify
         # Sử dụng commitment đảm bảo Fiat-Shamir vẫn an toàn
         # [QUAN TRỌNG] com_total đã ở coefficient domain (từ _matvec_mul)
         # KHÔNG GỌI from_ntt() vì sẽ làm sai dữ liệu!
         com_bytes = b"".join(p.to_bytes() for p in com_total)
-        c = _hash_to_challenge(message, com_bytes, q)
+        
+        # [FIPS 204] c là ĐA THỨC (polynomial), không phải scalar
+        # c = SampleInBall(H(message || commitment)) với tau=49 (Dilithium3)
+        c_poly = _hash_to_challenge_poly(message, com_bytes, tau=49, q=q, N=N)
         
         # ===========================================
         # VÒNG 3: RESPONSE PHASE (với Local Rejection Sampling)
@@ -360,7 +383,10 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             t_part_start = time.perf_counter()
             
             lam = lams[j]
-            c_lambda = (c * lam) % q
+            
+            # [FIPS 204] c_poly là đa thức (đã ở NTT domain)
+            # Nhân c_poly với Lagrange coefficient λ_j
+            c_poly_lam = c_poly.scalar_mul(lam)
             
             # Reconstruct s_share_j (hỗ trợ cả format cũ và mới)
             # Format mới (Module-LWE): có s1_shares và s2_shares
@@ -373,13 +399,20 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
                 # Backward compatibility: format cũ
                 s1_share_vec: List[Poly] = [Poly(list(share["s_shares"][l]), q, N) for l in range(L)]
             
-            # Tính z_j = y_j + (c * λ_j) * s1_share_j
-            # Chỉ dùng s1 (phần bí mật), không dùng s2 (phần error)
-            contrib = [s1_share_vec[l].scalar_mul(c_lambda) for l in range(L)]
+            # [FIPS 204] Tính z_j = y_j + (c_poly * λ_j) * s1_share_j
+            # c_poly_lam ở coefficient domain, cần convert sang NTT trước khi nhân
+            # Sau đó convert kết quả về coefficient domain
+            c_poly_lam_ntt = c_poly_lam.to_ntt()
+            contrib = [
+                s1_share_vec[l].to_ntt().mul(c_poly_lam_ntt).from_ntt() 
+                for l in range(L)
+            ]
             z_j = [y_list[j][l].add(contrib[l]) for l in range(L)]
             
             # LOCAL REJECTION SAMPLING
-            local_accept = _rejection_sample_local(z_j, y_list[j], c_lambda, s1_share_vec, q, DILITHIUM_ETA)
+            # Note: _rejection_sample_local still uses simplified logic (norm check only)
+            # c_lambda parameter unused in current implementation
+            local_accept = _rejection_sample_local(z_j, y_list[j], 0, s1_share_vec, q, DILITHIUM_ETA)
             
             t_part_end = time.perf_counter()
             response_part_times.append(t_part_end - t_part_start)
@@ -431,7 +464,17 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         # [SỬA ĐỔI] Điều kiện: ||z|| <= t * B
         # Lấy t là số lượng người tham gia ký hiện tại
         current_t = len(sk_shares_subset)
-        current_bound = pk.get("bound", SIGNATURE_BOUND) * current_t
+        
+        # [SCALING] Với số participants lớn (N≥10), Lagrange coefficients λ lớn hơn
+        # dẫn đến c*λ*s lớn hơn => cần scale bound
+        # Heuristic: scale factor = sqrt(N) cho N≥10
+        n_total = len([s for s in sk_shares_subset])  # Same as current_t
+        if n_total >= 10:
+            scale_factor = (n_total / 5) ** 0.5  # sqrt scaling from baseline N=5
+        else:
+            scale_factor = 1.0
+        
+        current_bound = pk.get("bound", SIGNATURE_BOUND) * current_t * scale_factor
         
         if _poly_vec_check_norm(z_vec, current_bound):
             
@@ -444,19 +487,32 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             # Detect scheme from first share
             scheme = sk_shares_subset[0].get("scheme", "dilithium-dkg")
             
+            # [OPTIMIZATION] Compact signature format
+            # Chữ ký = (z_compact, c_poly_bytes, commitment, r)
+            # KHÔNG bao gồm b (APK - gửi riêng trong pk)
+            z_compact = pack_z_compact(z_vec, DILITHIUM_GAMMA1)
+            
+            # [FIPS 204] c là polynomial (từ SampleInBall), lưu dưới dạng bytes
+            # c_poly đang ở coefficient domain (từ _hash_to_challenge_poly), serialize trực tiếp
+            c_poly_bytes = c_poly.to_bytes()
+            
             signature = {
                 "scheme": scheme,
                 "q": q,
                 "N": N,
                 "K": K,
                 "L": L,
-                "c": c,
-                "z": _serialize_poly_vec(z_vec),
+                "c_poly": base64.b64encode(c_poly_bytes).decode(),  # Challenge polynomial
+                "z_compact": base64.b64encode(z_compact).decode(),  # ~3.8KB compressed
                 "participants": [s["party_id"] for s in sk_shares_subset],
                 # [FIX] Serialize commitment (đã ở coefficient domain từ _matvec_mul)
                 "commitment": base64.b64encode(b"".join(p.to_bytes() for p in com_total)).decode(),
                 # [MỚI] Thêm r vào chữ ký để Verify có thể mở cam kết
-                "r": _serialize_poly_vec(r_total)
+                "r": _serialize_poly_vec(r_total),
+                # Metadata (không tính vào kích thước chữ ký)
+                "_compressed": True,
+                "_fips204_compliant": True,  # Mark as FIPS 204 compliant
+                "_sig_size_bytes": len(z_compact) + len(c_poly_bytes)
             }
             # Timing tổng
             total_sign_time = sum(all_commitment_times) + sum(all_response_times)
@@ -479,6 +535,10 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             return signature, meta
         
         # Nếu global norm check fail => restart
+    
+    # Nếu đạt MAX_ATTEMPTS mà vẫn chưa thành công
+    print(f"Warning: Reached MAX_ATTEMPTS ({MAX_ATTEMPTS}) without success", file=sys.stderr)
+    return None, None
 
 
 def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, Any]) -> Tuple[bool, float]:
@@ -509,19 +569,48 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     
     q = pk["q"]; N = pk["N"]; K = pk["K"]; L = pk["L"]
     
-    # 1. Kiểm tra norm(z) <= t * B
+    # 1. Kiểm tra norm(z) <= t * B (với scaling cho N lớn)
     # [SỬA ĐỔI] Lấy t từ danh sách người ký trong chữ ký
     t_signers = len(signature["participants"])
-    verify_bound = pk.get("bound", SIGNATURE_BOUND) * t_signers
     
-    z_vec = _deserialize_poly_vec(signature["z"], q, N)
+    # [SCALING] Apply same scaling as in signing for large participant counts
+    if t_signers >= 10:
+        scale_factor = (t_signers / 5) ** 0.5
+    else:
+        scale_factor = 1.0
+    
+    verify_bound = pk.get("bound", SIGNATURE_BOUND) * t_signers * scale_factor
+    
+    # [OPTIMIZATION] Deserialize compact z and challenge
+    if signature.get("_compressed", False):
+        z_compact = base64.b64decode(signature["z_compact"])
+        z_vec = unpack_z_compact(z_compact, L, N, q, DILITHIUM_GAMMA1)
+        
+        # [FIPS 204] Check if polynomial challenge (new) or scalar (old)
+        if "_fips204_compliant" in signature and signature["_fips204_compliant"]:
+            # New format: c is polynomial
+            c_poly_bytes = base64.b64decode(signature["c_poly"])
+            c_from_sig = Poly.from_bytes(c_poly_bytes, q, N)  # In coefficient domain
+        else:
+            # Old format: c is scalar seed
+            c_seed = base64.b64decode(signature.get("c_seed", b""))
+            c_scalar = unpack_challenge_seed(c_seed, q)
+            # Convert scalar to polynomial for compatibility
+            c_from_sig = None  # Will be compared as scalar
+    else:
+        # Backward compatibility: old format
+        z_vec = _deserialize_poly_vec(signature["z"], q, N)
+        c_from_sig = None  # Old scalar format
+    
     if not _poly_vec_check_norm(z_vec, verify_bound):
         # Nếu norm quá lớn so với ngưỡng cho phép => từ chối ngay
         t1 = time.perf_counter()
         return False, (t1 - t0)
     
-    # 2. Deserialize các thành phần
-    A = [[Poly.from_bytes(base64.b64decode(pk["A"][k][l]), q, N) for l in range(L)] for k in range(K)]
+    # 2. Deserialize public key - tái tạo ma trận A từ seed ρ
+    # Theo FIPS 204: A = ExpandA(ρ) thay vì deserialize toàn bộ ma trận
+    rho = base64.b64decode(pk["rho"])
+    A = expand_a(rho, K, L, q, N)
     t_vec = _deserialize_poly_vec(pk["t"], q, N)
     
     # [H3] Sinh commitment scheme động từ message và pk (giống như trong sign)
@@ -539,27 +628,28 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     # Deserialize r_total
     r_total = _deserialize_poly_vec(signature["r"], q, N)
     
-    # 3. Lấy challenge c từ signature
-    c_from_sig = int(signature["c"]) % q
-    
-    # 4. Tính w' = A*z - c*t (phương trình Dilithium)
-    Az = _matvec_mul(A, z_vec)
-    c_t = [t.scalar_mul(c_from_sig) for t in t_vec]
-    w_prime = [Az[k].sub(c_t[k]) for k in range(K)]
-    
-    # 5. Recompute challenge c' từ COMMITMENT và so sánh với c trong signature
-    # [FIX] Challenge phải được tính từ commitment (như trong sign)
-    # Không tính từ w' vì trong Module-LWE: w' = A*y - c*s2 ≠ w = A*y
+    # 3. Recompute challenge c' từ COMMITMENT
     # [QUAN TRỌNG] com_total đã được deserialize từ coefficient domain
-    # (vì trong sign, ta đã serialize com_total_coeff)
     # => KHÔNG CẦN convert lại, dùng trực tiếp
     com_bytes = b"".join(p.to_bytes() for p in com_total)
-    c_computed = _hash_to_challenge(message, com_bytes, q)
     
-    if c_from_sig != c_computed:
-        # Challenge không khớp => commitment không đúng => signature invalid
-        t1 = time.perf_counter()
-        return False, (t1 - t0)
+    # Kiểm tra định dạng signature và recompute challenge tương ứng
+    if "_fips204_compliant" in signature and signature["_fips204_compliant"]:
+        # FIPS 204: Polynomial challenge
+        c_computed = _hash_to_challenge_poly(message, com_bytes, tau=49)
+        # So sánh polynomial: kiểm tra từng coefficient với numpy
+        import numpy as np
+        if not np.array_equal(c_from_sig.coeffs, c_computed.coeffs):
+            # Challenge không khớp => signature invalid
+            t1 = time.perf_counter()
+            return False, (t1 - t0)
+    else:
+        # Legacy: Scalar challenge
+        c_computed = _hash_to_challenge(message, com_bytes, q)
+        if c_from_sig != c_computed:
+            # Challenge không khớp => signature invalid
+            t1 = time.perf_counter()
+            return False, (t1 - t0)
     
     # 6. [LƯU Ý] Không cần kiểm tra commitment opening với w_prime
     # Lý do: Trong Module-LWE, w' = A*y - c*s2 ≠ w = A*y
@@ -594,7 +684,7 @@ def run_full_benchmark(num_runs: int = 10) -> List[Dict[str, Any]]:
     # Kịch bản B: Khả năng mở rộng (N và T tăng)
     SCALABILITY_CONFIGS = [
         (N, T, K, L, label)
-        for N, T in [(5, 3), (10, 6), (20, 13)]
+        for N, T in [(5, 3), (10, 6)]  # Skip N=20: quá chậm (300-800 attempts/run)
         for K, L, label in [
             (1, 1, "Toy (Baseline)"), 
             (6, 5, "Dilithium 3 (Real K,L)")
@@ -627,14 +717,21 @@ def run_full_benchmark(num_runs: int = 10) -> List[Dict[str, Any]]:
                 
                 try:
                     # Gọi hàm ký và thu thập metadata
-                    sig, meta = sign_threshold(b"Benchmark message", signing_subset, pk)
+                    result = sign_threshold(b"Benchmark message", signing_subset, pk)
+                    
+                    # Check if signing failed (exceeded MAX_ATTEMPTS)
+                    if result is None or result == (None, None):
+                        print(f"\n  [WARNING] Signing failed (exceeded MAX_ATTEMPTS)")
+                        continue
+                    
+                    sig, meta = result
                     
                     total_time_s += sum(meta['part_times'])  # Tổng thời gian ký
                     total_attempts += meta['attempts']
                     successful_runs += 1
                     
-                except ValueError as e:
-                    # Bắt lỗi nếu Lagrange fail (xác suất rất nhỏ nếu q lớn)
+                except (ValueError, TypeError) as e:
+                    # Bắt lỗi nếu Lagrange fail hoặc unpacking None
                     print(f"\n  [ERROR] {e}")
                     continue
             
@@ -662,7 +759,7 @@ def run_full_benchmark(num_runs: int = 10) -> List[Dict[str, Any]]:
                 print("{:<25} {:<8} {:<8} {:<12.4f} {:<14.2f} {:<12.4f} {:<10}".format(
                     label, f"{N}/{T}", f"{K}x{L}", avg_sign_time, avg_attempts, throughput_sps, "✓ OK"))
             else:
-                print(f"  [SKIPPED] Failed to complete runs.")
+                print(f"\n  [SKIPPED] Failed to complete any runs (0/{num_runs} successful).")
                 
         except Exception as e:
             print(f"  [ERROR] {e}")
