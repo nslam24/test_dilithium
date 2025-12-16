@@ -33,7 +33,7 @@ DILITHIUM_GAMMA1 = 524288   # = 2^19, bound for y nonce [cite: 320, 461]
 # Empirical observation: max|z_i| ≈ 4M với c*λ*s overhead
 # Để global check (t=3) pass hầu hết: bound ≥ 4M
 # Set bound = γ₁ * 4 = 2.1M per participant
-SIGNATURE_BOUND = int(524288 * 4)  # ≈ 2.1M per participant
+SIGNATURE_BOUND = int(524038)
 
 NTT_ROOT = 1753
 NTT_ROOT_INV = pow(NTT_ROOT, -1, DILITHIUM_Q)
@@ -120,7 +120,7 @@ def sample_in_ball(seed: bytes, tau: int = 49, q: int = DILITHIUM_Q, N: int = DI
         shake = hashlib.shake_256(seed)
         seed = shake.digest(32)
     
-    #Initialize polynomial with all zeros
+    # Initialize polynomial with all zeros
     coeffs = [0] * N
     
     # Use deterministic RNG from seed (FIPS 204 uses rejection sampling on SHAKE output)
@@ -128,7 +128,7 @@ def sample_in_ball(seed: bytes, tau: int = 49, q: int = DILITHIUM_Q, N: int = DI
     import random
     rng = random.Random(int.from_bytes(seed, 'little'))
     
-    # Sample tau positions uniformly without replacement
+    # Sample tau positions uniformly without replacement (MUST use rng for determinism!)
     positions = rng.sample(range(N), tau)
     
     # For each selected position, assign ±1 based on next bit from seed
@@ -146,9 +146,9 @@ def sample_in_ball(seed: bytes, tau: int = 49, q: int = DILITHIUM_Q, N: int = DI
     # Convert negative coefficients to modular form
     coeffs = [(c + q) % q for c in coeffs]
     
-    # Create polynomial in coefficient domain (NOT NTT)
+    # Create polynomial and convert to NTT domain for efficient multiplication
     poly = Poly(coeffs, q, N, in_ntt=False)
-    return poly
+    return poly.to_ntt()
 
 
 def _hash_to_challenge_poly(message: bytes, w_bytes: bytes, 
@@ -768,16 +768,10 @@ def _rejection_sample_local(z_i: List[Poly], y_i: List[Poly],
         for c in coeffs:
             if abs(c) >= limit:
                 return False  # REJECT: Hệ số quá lớn, vượt biên
-                
-    # 2. Probabilistic Check (Check 2)
-    # Theo bài báo: min(1, D_z / M * D_y) [cite: 336]
-    # M = 1.8 cho acceptance rate ≈ 55.6%
-    # Với t=3 participants: (0.556)³ ≈ 17% => ~6 attempts trung bình
-    # Cân bằng giữa bảo mật (không quá lỏng) và hiệu năng (không quá gắt)
-    M = 1.5
+    M = 1.3
     
     return random.random() < (1.0 / M)
-
+    # return True
 
 # =============================
 # HASH-THEN-REVEAL PROTOCOL

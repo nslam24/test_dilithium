@@ -1,0 +1,150 @@
+[
+  {
+    "test": "TC-01 Baseline",
+    "N": 3,
+    "T": 2,
+    "keygen_time": 0.012043424881994724,
+    "sign_attempts": 1,
+    "verify_time": 0.004252087324857712,
+    "valid": true
+  },
+  {
+    "test": "TC-01 Baseline",
+    "N": 5,
+    "T": 2,
+    "keygen_time": 0.008313997182995081,
+    "sign_attempts": 1,
+    "verify_time": 0.0039132460951805115,
+    "valid": true
+  },
+  {
+    "test": "TC-01 Baseline",
+    "N": 10,
+    "T": 5,
+    "keygen_time": 0.027473791036754847,
+    "sign_attempts": 1,
+    "verify_time": 0.004246758762747049,
+    "valid": true
+  },
+  {
+    "test": "TC-01 Baseline",
+    "N": 20,
+    "T": 10,
+    "keygen_time": 0.09837185870856047,
+    "sign_attempts": 1,
+    "verify_time": 0.004001866094768047,
+    "valid": true
+  },
+  {
+    "test_case": "TC-02",
+    "tests": [
+      {
+        "config": {
+          "T": 2,
+          "N": 3
+        },
+        "with_t_shares": {
+          "shares_count": 2,
+          "can_sign": true
+        },
+        "with_all_shares": {
+          "shares_count": 3,
+          "can_sign": true
+        },
+        "with_insufficient_shares": {
+          "shares_count": 1,
+          "can_sign": false
+        }
+      },
+      {
+        "config": {
+          "T": 3,
+          "N": 5
+        },
+        "with_t_shares": {
+          "shares_count": 3,
+          "can_sign": true
+        },
+        "with_all_shares": {
+          "shares_count": 5,
+          "can_sign": true
+        },
+        "with_insufficient_shares": {
+          "shares_count": 2,
+          "can_sign": false
+        }
+      },
+      {
+        "config": {
+          "T": 6,
+          "N": 10
+        },
+        "with_t_shares": {
+          "shares_count": 6,
+          "can_sign": true
+        },
+        "with_all_shares": {
+          "shares_count": 10,
+          "can_sign": true
+        },
+        "with_insufficient_shares": {
+          "shares_count": 5,
+          "can_sign": false
+        }
+      }
+    ]
+  },
+  {
+    "test_case": "TC-03",
+    "measurements": [
+      {
+        "N": 2,
+        "signature_size": 2816,
+        "attempts": 1,
+        "rounds": 4
+      },
+      {
+        "N": 5,
+        "signature_size": 2816,
+        "attempts": 1,
+        "rounds": 4
+      },
+      {
+        "N": 10,
+        "signature_size": 2816,
+        "attempts": 1,
+        "rounds": 4
+      },
+      {
+        "N": 20,
+        "signature_size": 2816,
+        "attempts": 1,
+        "rounds": 4
+      }
+    ]
+  },
+  {
+    "test_case": "TC-04",
+    "name": "Stress Test - Stability Analysis",
+    "config": {
+      "iterations": 1000,
+      "N": 5,
+      "T": 3,
+      "K": 1,
+      "L": 1
+    },
+    "results": {
+      "total_signatures": 1000,
+      "successful": 1000,
+      "failed": 0,
+      "verify_success": 1000,
+      "success_rate": 100.0,
+      "verify_success_rate": 100.0,
+      "avg_attempts": 1.0,
+      "min_attempts": 1,
+      "max_attempts": 1,
+      "total_time_s": 15.053134679794312,
+      "throughput_sig_per_s": 66.43134611306515
+    }
+  }
+]

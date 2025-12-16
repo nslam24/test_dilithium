@@ -1,0 +1,73 @@
+================================================================================
+SCENARIO 1: PERFORMANCE & SCALABILITY (3-MODE COMPARISON)
+Iterations per configuration: 2
+================================================================================
+
+📊 Testing N=3
+   Mode B (Full Threshold): t=3/3
+   Mode C (Flexible Threshold): t=2/3
+------------------------------------------------------------
+  [1/3] Independent mode... ✓ KeyGen: 0.0007s, Sign: 0.0006s, Verify: 0.0003s
+  [2/3] Full Threshold (t=n)... [VERIFY] ✓ Norm check passed: norm=1388045 <= bound=1572114, ratio=0.883, t=3, scale=1.00
+[VERIFY] ✓ Norm check passed: norm=1467671 <= bound=1572114, ratio=0.934, t=3, scale=1.00
+✓ KeyGen: 0.0328s, Sign: 0.1637s, Verify: 0.0261s
+  [3/3] Flexible Threshold (t=2)... [VERIFY] ✓ Norm check passed: norm=1011319 <= bound=1048076, ratio=0.965, t=2, scale=1.00
+[VERIFY] ✓ Norm check passed: norm=1008190 <= bound=1048076, ratio=0.962, t=2, scale=1.00
+✓ KeyGen: 0.0259s, Sign: 0.0820s, Verify: 0.0260s
+
+📊 Testing N=5
+   Mode B (Full Threshold): t=5/5
+   Mode C (Flexible Threshold): t=3/5
+------------------------------------------------------------
+  [1/3] Independent mode... ✓ KeyGen: 0.0005s, Sign: 0.0008s, Verify: 0.0004s
+  [2/3] Full Threshold (t=n)... [VERIFY] ✓ Norm check passed: norm=2331775 <= bound=2620190, ratio=0.890, t=5, scale=1.00
+[VERIFY] ✓ Norm check passed: norm=2219070 <= bound=2620190, ratio=0.847, t=5, scale=1.00
+✓ KeyGen: 0.0662s, Sign: 0.1557s, Verify: 0.0253s
+  [3/3] Flexible Threshold (t=3)... [VERIFY] ✓ Norm check passed: norm=1382675 <= bound=1572114, ratio=0.880, t=3, scale=1.00
+[VERIFY] ✓ Norm check passed: norm=1401556 <= bound=1572114, ratio=0.892, t=3, scale=1.00
+✓ KeyGen: 0.0478s, Sign: 0.0761s, Verify: 0.0254s
+
+📊 Testing N=10
+   Mode B (Full Threshold): t=10/10
+   Mode C (Flexible Threshold): t=6/10
+------------------------------------------------------------
+  [1/3] Independent mode... ✓ KeyGen: 0.0009s, Sign: 0.0016s, Verify: 0.0008s
+  [2/3] Full Threshold (t=n)... [VERIFY] ✓ Norm check passed: norm=2808440 <= bound=7411016, ratio=0.379, t=10, scale=1.41
+[VERIFY] ✓ Norm check passed: norm=2974553 <= bound=7411016, ratio=0.401, t=10, scale=1.41
+✓ KeyGen: 0.2142s, Sign: 0.5255s, Verify: 0.0253s
+  [3/3] Flexible Threshold (t=6)... [VERIFY] ✓ Norm check passed: norm=2353315 <= bound=3144228, ratio=0.748, t=6, scale=1.00
+[VERIFY] ✓ Norm check passed: norm=2147650 <= bound=3144228, ratio=0.683, t=6, scale=1.00
+✓ KeyGen: 0.1390s, Sign: 0.2087s, Verify: 0.0254s
+
+📊 Testing N=20
+   Mode B (Full Threshold): t=20/20
+   Mode C (Flexible Threshold): t=13/20
+------------------------------------------------------------
+  [1/3] Independent mode... ✓ KeyGen: 0.0016s, Sign: 0.0031s, Verify: 0.0015s
+  [2/3] Full Threshold (t=n)... [VERIFY] ✓ Norm check passed: norm=4179447 <= bound=20961520, ratio=0.199, t=20, scale=2.00
+[VERIFY] ✓ Norm check passed: norm=4050429 <= bound=20961520, ratio=0.193, t=20, scale=2.00
+✓ KeyGen: 0.7850s, Sign: 19.7162s, Verify: 0.0253s
+  [3/3] Flexible Threshold (t=13)... [VERIFY] ✓ Norm check passed: norm=3578483 <= bound=10984817, ratio=0.326, t=13, scale=1.61
+[VERIFY] ✓ Norm check passed: norm=3419114 <= bound=10984817, ratio=0.311, t=13, scale=1.61
+✓ KeyGen: 0.5143s, Sign: 1.6240s, Verify: 0.0265s
+
+✅ Scenario 1 completed. Results saved to results/scenario1_performance_3modes.json
+
+================================================================================
+SUMMARY TABLE: Average Times (seconds)
+================================================================================
+N    Mode                      t    KeyGen     Sign       Verify     Success 
+--------------------------------------------------------------------------------
+3    independent               3    0.0007     0.0006     0.0003     ✓       
+3    Thr. full t=3             3    0.0328     0.1637     0.0261     ✓       
+3    Thr. flex t=2             2    0.0259     0.0820     0.0260     ✓       
+5    independent               5    0.0005     0.0008     0.0004     ✓       
+5    Thr. full t=5             5    0.0662     0.1557     0.0253     ✓       
+5    Thr. flex t=3             3    0.0478     0.0761     0.0254     ✓       
+10   independent               10   0.0009     0.0016     0.0008     ✓       
+10   Thr. full t=10            10   0.2142     0.5255     0.0253     ✓       
+10   Thr. flex t=6             6    0.1390     0.2087     0.0254     ✓       
+20   independent               20   0.0016     0.0031     0.0015     ✓       
+20   Thr. full t=20            20   0.7850     19.7162    0.0253     ✓       
+20   Thr. flex t=13            13   0.5143     1.6240     0.0265     ✓       
+================================================================================

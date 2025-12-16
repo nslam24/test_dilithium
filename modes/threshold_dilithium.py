@@ -476,7 +476,12 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
         
         current_bound = pk.get("bound", SIGNATURE_BOUND) * current_t * scale_factor
         
-        if _poly_vec_check_norm(z_vec, current_bound):
+        # [LOG] Tính actual norm để track rejection statistics
+        z_norm = max(max(abs(c) for c in p.get_centered_coeffs()) for p in z_vec)
+        accept_global = z_norm <= current_bound
+        
+        if accept_global:
+            # print(f"[SIGN] Attempt {attempts}: ✓ ACCEPT - norm={z_norm:.0f}, bound={current_bound:.0f}, ratio={z_norm/current_bound:.3f}, t={current_t}, scale={scale_factor:.2f}", file=sys.stderr)
             
             # [FIX] Tính tổng randomness r = Σ r_j
             # Điều này cần thiết để verifier có thể mở commitment: Open(com, w', r)
@@ -492,9 +497,10 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
             # KHÔNG bao gồm b (APK - gửi riêng trong pk)
             z_compact = pack_z_compact(z_vec, DILITHIUM_GAMMA1)
             
-            # [FIPS 204] c là polynomial (từ SampleInBall), lưu dưới dạng bytes
-            # c_poly đang ở coefficient domain (từ _hash_to_challenge_poly), serialize trực tiếp
-            c_poly_bytes = c_poly.to_bytes()
+            # [FIPS 204] c là polynomial (từ SampleInBall ở NTT domain)
+            # Convert về coefficient domain trước khi serialize
+            c_poly_coeff = c_poly.from_ntt()
+            c_poly_bytes = c_poly_coeff.to_bytes()
             
             signature = {
                 "scheme": scheme,
@@ -533,6 +539,9 @@ def sign_threshold(message: bytes, sk_shares_subset: List[Dict[str, Any]], pk: D
                 },
             }
             return signature, meta
+        else:
+            # Global rejection - log chi tiết
+            print(f"[SIGN] Attempt {attempts}: ✗ REJECT - norm={z_norm:.0f} > bound={current_bound:.0f}, ratio={z_norm/current_bound:.3f}", file=sys.stderr)
         
         # Nếu global norm check fail => restart
     
@@ -602,10 +611,16 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
         z_vec = _deserialize_poly_vec(signature["z"], q, N)
         c_from_sig = None  # Old scalar format
     
+    # [LOG] Tính actual norm để track
+    z_norm = max(max(abs(c) for c in p.get_centered_coeffs()) for p in z_vec)
+    
     if not _poly_vec_check_norm(z_vec, verify_bound):
         # Nếu norm quá lớn so với ngưỡng cho phép => từ chối ngay
+        print(f"[VERIFY] ✗ REJECT - norm check failed: norm={z_norm:.0f} > bound={verify_bound:.0f}, ratio={z_norm/verify_bound:.3f}", file=sys.stderr)
         t1 = time.perf_counter()
         return False, (t1 - t0)
+    
+    print(f"[VERIFY] ✓ Norm check passed: norm={z_norm:.0f} <= bound={verify_bound:.0f}, ratio={z_norm/verify_bound:.3f}, t={t_signers}, scale={scale_factor:.2f}", file=sys.stderr)
     
     # 2. Deserialize public key - tái tạo ma trận A từ seed ρ
     # Theo FIPS 204: A = ExpandA(ρ) thay vì deserialize toàn bộ ma trận
@@ -636,10 +651,15 @@ def verify_threshold(message: bytes, signature: Dict[str, Any], pk: Dict[str, An
     # Kiểm tra định dạng signature và recompute challenge tương ứng
     if "_fips204_compliant" in signature and signature["_fips204_compliant"]:
         # FIPS 204: Polynomial challenge
+        # c_computed ở NTT domain (từ _hash_to_challenge_poly)
+        # c_from_sig ở coefficient domain (từ deserialize)
+        # Convert c_computed về coefficient domain để so sánh
         c_computed = _hash_to_challenge_poly(message, com_bytes, tau=49)
+        c_computed_coeff = c_computed.from_ntt()
+        
         # So sánh polynomial: kiểm tra từng coefficient với numpy
         import numpy as np
-        if not np.array_equal(c_from_sig.coeffs, c_computed.coeffs):
+        if not np.array_equal(c_from_sig.coeffs, c_computed_coeff.coeffs):
             # Challenge không khớp => signature invalid
             t1 = time.perf_counter()
             return False, (t1 - t0)
