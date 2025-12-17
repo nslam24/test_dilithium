@@ -6,6 +6,7 @@ separate signatures that can be verified individually.
 
 This module provides:
 - sign_independent(message, key_pairs, level, sig_type) -> (signatures, sign_times)
+- sign_independent_parallel(message, key_pairs, level, sig_type) -> (signatures, sign_times)
 - verify_independent(message, signatures, public_keys, level, sig_type) -> (ok, results, verify_times)
 
 Vietnamese comments are added to explain steps.
@@ -16,6 +17,8 @@ import oqs
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, ec
 from cryptography.hazmat.backends import default_backend
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import os
 
 
 def sign_independent(message: bytes, key_pairs: List[Tuple[bytes, bytes]], level: str, sig_type: str) -> Tuple[List[bytes], List[float]]:
@@ -45,6 +48,50 @@ def sign_independent(message: bytes, key_pairs: List[Tuple[bytes, bytes]], level
         t1 = time.time()
         sigs.append(sig)
         times.append(t1 - t0)
+    return sigs, times
+
+
+def sign_independent_parallel(message: bytes, key_pairs: List[Tuple[bytes, bytes]], level: str, sig_type: str, n_workers: int = None) -> Tuple[List[bytes], List[float]]:
+    """Each signer signs in PARALLEL using threading.
+    
+    This is the TRUE independent mode - all signers work simultaneously.
+    Uses ThreadPoolExecutor for Python GIL-friendly parallelism with C extensions.
+    
+    Args:
+      message: bytes to sign
+      key_pairs: list of (pub_bytes, priv_bytes)
+      level: label for Dilithium (e.g. 'Dilithium3')
+      sig_type: 'dilithium' | 'rsa' | 'ecc'
+      n_workers: number of parallel workers (default: os.cpu_count())
+    
+    Returns (signatures, sign_times)
+    """
+    if n_workers is None:
+        n_workers = min(os.cpu_count() or 4, len(key_pairs))
+    
+    def sign_one(args):
+        pub, priv = args
+        t0 = time.perf_counter()
+        if sig_type == "dilithium":
+            with oqs.Signature(level, priv) as signer:
+                sig = signer.sign(message)
+        elif sig_type == "rsa":
+            sk = serialization.load_der_private_key(priv, password=None, backend=default_backend())
+            sig = sk.sign(message, padding.PKCS1v15(), hashes.SHA256())
+        else:
+            sk = serialization.load_der_private_key(priv, password=None, backend=default_backend())
+            sig = sk.sign(message, ec.ECDSA(hashes.SHA256()))
+        t1 = time.perf_counter()
+        return sig, t1 - t0
+    
+    # Execute in parallel using threads (liboqs is C extension, releases GIL)
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        results = list(executor.map(sign_one, key_pairs))
+    
+    # Unpack results
+    sigs = [sig for sig, _ in results]
+    times = [t for _, t in results]
+    
     return sigs, times
 
 

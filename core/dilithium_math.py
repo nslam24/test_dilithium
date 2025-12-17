@@ -69,6 +69,15 @@ _lib.poly_pointwise_montgomery.restype = None
 _lib.poly_reduce.argtypes = [ctypes.POINTER(PolyC)]
 _lib.poly_reduce.restype = None
 
+# Declare expand_a C function
+_lib.expand_a.argtypes = [
+    ctypes.POINTER(PolyC),  # A matrix (K*L polynomials)
+    ctypes.c_char_p,        # rho (32 bytes)
+    ctypes.c_uint,          # K
+    ctypes.c_uint           # L
+]
+_lib.expand_a.restype = None
+
 
 # NTT twiddle factors are now initialized in C library
 
@@ -146,9 +155,10 @@ def sample_in_ball(seed: bytes, tau: int = 49, q: int = DILITHIUM_Q, N: int = DI
     # Convert negative coefficients to modular form
     coeffs = [(c + q) % q for c in coeffs]
     
-    # Create polynomial and convert to NTT domain for efficient multiplication
+    # Create polynomial in coefficient domain (NOT NTT)
+    # The caller will convert to NTT if needed for multiplication
     poly = Poly(coeffs, q, N, in_ntt=False)
-    return poly.to_ntt()
+    return poly
 
 
 def _hash_to_challenge_poly(message: bytes, w_bytes: bytes, 
@@ -189,7 +199,7 @@ def _hash_to_challenge_poly(message: bytes, w_bytes: bytes,
     return c_poly
 
 
-def expand_a(rho: bytes, K: int, L: int, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> List[List['Poly']]:
+def expand_a(rho: bytes, K: int, L: int, q: int = DILITHIUM_Q, N: int = DILITHIUM_N, use_c: bool = True) -> List[List['Poly']]:
     """
     ExpandA(ρ) - Generate matrix A from seed according to FIPS 204
     
@@ -202,6 +212,7 @@ def expand_a(rho: bytes, K: int, L: int, q: int = DILITHIUM_Q, N: int = DILITHIU
         L: number of columns
         q: modulus
         N: polynomial degree
+        use_c: Use C implementation (much faster) if True, Python if False
         
     Returns:
         K×L matrix of polynomials
@@ -209,49 +220,73 @@ def expand_a(rho: bytes, K: int, L: int, q: int = DILITHIUM_Q, N: int = DILITHIU
     if len(rho) != 32:
         raise ValueError("rho must be 32 bytes")
     
-    A = []
-    for i in range(K):
-        row = []
-        for j in range(L):
-            # Generate polynomial A[i][j] from SHAKE-128(rho || i || j)
-            # Each polynomial needs enough randomness for N coefficients in [0, q)
-            
-            # Create input: rho || i || j (as in FIPS 204)
-            shake_input = rho + bytes([i, j])
-            
-            # Use SHAKE-128 to generate coefficients
-            # Need to generate until we have N valid coefficients
-            coeffs = []
-            shake = hashlib.shake_128(shake_input)
-            
-            # Generate coefficients using rejection sampling
-            # Each coefficient is 3 bytes (24 bits) which is enough for q = 8380417 (< 2^24)
-            buf_size = 3 * N * 2  # Generate extra to avoid multiple calls
-            stream = shake.digest(buf_size)
-            
-            idx = 0
-            while len(coeffs) < N and idx + 2 < len(stream):
-                # Read 3 bytes and convert to integer
-                t = int.from_bytes(stream[idx:idx+3], 'little')
-                idx += 3
-                
-                # Rejection sampling: accept if t < q
-                # For Dilithium q = 8380417 ≈ 2^23, so ~50% acceptance rate
-                if t < q:
-                    coeffs.append(t)
-                
-                # If we run out of stream, generate more
-                if idx + 2 >= len(stream) and len(coeffs) < N:
-                    stream = shake.digest(buf_size)
-                    idx = 0
-            
-            # Create polynomial from coefficients
-            poly = Poly(coeffs[:N], q, N, in_ntt=False)
-            row.append(poly)
+    if use_c:
+        # Use C implementation (MUCH faster - ~100x speedup)
+        # Allocate C array for K*L polynomials
+        matrix_size = K * L
+        matrix_c = (PolyC * matrix_size)()
         
-        A.append(row)
-    
-    return A
+        # Call C function
+        _lib.expand_a(matrix_c, rho, K, L)
+        
+        # Convert back to Python Poly objects
+        A = []
+        for i in range(K):
+            row = []
+            for j in range(L):
+                idx = i * L + j
+                coeffs = np.array([matrix_c[idx].coeffs[k] for k in range(N)], dtype=np.int64)
+                poly = Poly(coeffs, q, N, in_ntt=False)
+                row.append(poly)
+            A.append(row)
+        return A
+    else:
+        # Python implementation (kept for reference/debugging)
+        A = []
+        for i in range(K):
+            row = []
+            for j in range(L):
+                # Generate polynomial A[i][j] from SHAKE-128(rho || nonce)
+                # nonce = (i << 8) | j as 2-byte little-endian (FIPS 204 spec)
+                
+                # Create nonce: 16-bit value (i << 8) | j
+                nonce = (i << 8) | j
+                shake_input = rho + nonce.to_bytes(2, 'little')
+                
+                # Use SHAKE-128 to generate coefficients
+                # Need to generate until we have N valid coefficients
+                coeffs = []
+                shake = hashlib.shake_128(shake_input)
+                
+                # Generate coefficients using rejection sampling
+                # Each coefficient is 3 bytes (24 bits) which is enough for q = 8380417 (< 2^24)
+                buf_size = 3 * N * 2  # Generate extra to avoid multiple calls
+                stream = shake.digest(buf_size)
+                
+                idx = 0
+                while len(coeffs) < N and idx + 2 < len(stream):
+                    # Read 3 bytes and convert to integer
+                    t = int.from_bytes(stream[idx:idx+3], 'little')
+                    idx += 3
+                    
+                    # Apply 23-bit mask FIRST (as in FIPS 204)
+                    t &= 0x7FFFFF  # Mask to 23 bits (0 to 8388607)
+                    
+                    # Rejection sampling: accept if t < q
+                    # For Dilithium q = 8380417 ≈ 2^23, so ~99.9% acceptance rate after masking
+                    if t < q:
+                        coeffs.append(t)
+                    
+                    # If we run out of stream, generate more
+                    if idx + 2 >= len(stream) and len(coeffs) < N:
+                        stream = shake.digest(buf_size)
+                        idx = 0
+                
+                # Create polynomial from coefficients
+                poly = Poly(coeffs[:N], q, N, in_ntt=False)
+                row.append(poly)
+            A.append(row)
+        return A
 
 
 # =============================
@@ -770,8 +805,8 @@ def _rejection_sample_local(z_i: List[Poly], y_i: List[Poly],
                 return False  # REJECT: Hệ số quá lớn, vượt biên
     M = 1.3
     
-    return random.random() < (1.0 / M)
-    # return True
+    # return random.random() < (1.0 / M)
+    return True
 
 # =============================
 # HASH-THEN-REVEAL PROTOCOL

@@ -1,0 +1,34 @@
+[
+  {
+    "n_parties": 10,
+    "threshold": 10,
+    "mode": "threshold_full_t=10",
+    "total_iterations": 1000,
+    "success_count": 1000,
+    "success_rate": 100.0,
+    "avg_restarts": 0.0,
+    "max_restarts": 0,
+    "exceptions": [],
+    "crash_count": 0,
+    "avg_sign_time": 1.3577783348737285,
+    "std_sign_time": 1.196775762360144,
+    "min_sign_time": 0.17364364210516214,
+    "max_sign_time": 7.057397071272135
+  },
+  {
+    "n_parties": 10,
+    "threshold": 6,
+    "mode": "threshold_flex_t=6",
+    "total_iterations": 1000,
+    "success_count": 1000,
+    "success_rate": 100.0,
+    "avg_restarts": 0.0,
+    "max_restarts": 0,
+    "exceptions": [],
+    "crash_count": 0,
+    "avg_sign_time": 0.33350580585049466,
+    "std_sign_time": 0.23736716274802871,
+    "min_sign_time": 0.11361471377313137,
+    "max_sign_time": 1.581687225960195
+  }
+]

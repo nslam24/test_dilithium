@@ -1,0 +1,41 @@
+{
+  "n": 20,
+  "timing": {
+    "independent": {
+      "keygen": 0.0019776963939269385,
+      "sign": 0.003515132237225771,
+      "verify": 0.001421252420792977
+    },
+    "threshold_full": {
+      "keygen": 0.7886070880728463,
+      "sign": 58.786687298988305,
+      "verify": 0.024828999303281307,
+      "t": 20
+    },
+    "threshold_flex": {
+      "keygen": 0.5132405667876204,
+      "sign": 3.492743257433176,
+      "verify": 0.025673316325992346,
+      "t": 13
+    }
+  },
+  "storage": {
+    "independent": {
+      "pk_per_user": 1952,
+      "sig_per_user": 3293,
+      "total": 104900
+    },
+    "threshold_full": {
+      "pk": 3104,
+      "sig": 33169,
+      "total": 36273,
+      "compression": 2.8919582058280264
+    },
+    "threshold_flex": {
+      "pk": 3104,
+      "sig": 33141,
+      "total": 36245,
+      "compression": 2.894192302386536
+    }
+  }
+}

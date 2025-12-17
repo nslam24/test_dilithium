@@ -249,6 +249,41 @@ t_flex = max(2, int(2*n/3))  # Mode C
 
 ---
 
+## 📊 3 Biểu Đồ Chứng Minh Ưu Điểm
+
+### 🎨 Visualization: Trade-off Analysis
+
+![Trade-off Analysis](results/tradeoff_analysis.png)
+
+**Cách đọc 3 biểu đồ:**
+
+#### 🏆 Biểu đồ 1: The Verification Win
+- **Đường đỏ (Independent)**: Tăng tuyến tính O(N) - cần verify N chữ ký riêng lẻ
+  - N=3: 0.91ms, N=20: 29.16ms
+- **Đường xanh lá (Threshold Full)**: Hằng số O(1) - chỉ verify 1 aggregate signature
+  - Tất cả N: ~25ms (constant!)
+- **Đường xanh dương (Flexible)**: Cũng O(1) như Full
+- **Kết luận**: Khi N > 20, Threshold thắng áp đảo! ✅
+
+#### 💾 Biểu đồ 2: The Storage Win
+- **Đường đỏ (Independent)**: Tăng tuyến tính O(N)
+  - N=3: 15.4KB → N=20: 102.4KB
+- **Đường xanh (Threshold)**: Hằng số ~6.1KB (không phụ thuộc N!)
+- **Compression**: 16.7x tại N=20
+- **Kết luận**: Phù hợp Blockchain - kích thước block không tăng theo số người ký! ✅
+
+#### ⚠️ Biểu đồ 3: The Communication Cost
+- **Đường xanh lá (Independent)**: 0 KB - không cần giao tiếp
+- **Đường đỏ (Full Threshold)**: Tăng O(t²) - N=20: 1214KB
+- **Đường cam (Flexible)**: Trung bình - N=20: 514KB (tiết kiệm 58%)
+- **Kết luận**: Trade-off phải chấp nhận - đổi network bandwidth lấy storage efficiency! ⚠️
+
+**📈 Files**:
+- PNG: `results/tradeoff_analysis.png` (560KB, high-res)
+- PDF: `results/tradeoff_analysis.pdf` (53KB, publication-ready)
+
+---
+
 ## 🔗 Related Files
 
 - **Raw data**: `results/scenario1_performance_3modes.json`

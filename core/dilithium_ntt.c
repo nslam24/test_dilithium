@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "fips202.h"
 
 #define DILITHIUM_N 256
 #define DILITHIUM_Q 8380417
@@ -190,5 +191,117 @@ void poly_pointwise_montgomery(poly *c, const poly *a, const poly *b) {
     unsigned int i;
     for(i = 0; i < DILITHIUM_N; ++i) {
         c->coeffs[i] = montgomery_reduce((int64_t)a->coeffs[i] * b->coeffs[i]);
+    }
+}
+
+/*************************************************
+* Name:        rej_uniform
+*
+* Description: Sample uniformly random coefficients in [0, Q-1] by
+*              performing rejection sampling on array of random bytes.
+*
+* Arguments:   - int32_t *a: pointer to output array (allocated)
+*              - unsigned int len: number of coefficients to be sampled
+*              - const uint8_t *buf: array of random bytes
+*              - unsigned int buflen: length of array of random bytes
+*
+* Returns number of sampled coefficients. Can be smaller than len if not enough
+* random bytes were given.
+**************************************************/
+static unsigned int rej_uniform(int32_t *a,
+                                unsigned int len,
+                                const uint8_t *buf,
+                                unsigned int buflen)
+{
+    unsigned int ctr, pos;
+    uint32_t t;
+
+    ctr = pos = 0;
+    while(ctr < len && pos + 3 <= buflen) {
+        t  = buf[pos++];
+        t |= (uint32_t)buf[pos++] << 8;
+        t |= (uint32_t)buf[pos++] << 16;
+        t &= 0x7FFFFF;
+
+        if(t < DILITHIUM_Q)
+            a[ctr++] = t;
+    }
+
+    return ctr;
+}
+
+/*************************************************
+* Name:        poly_uniform
+*
+* Description: Sample polynomial with uniformly random coefficients
+*              in [0,Q-1] by performing rejection sampling on the
+*              output stream of SHAKE128(seed|nonce)
+*
+* Arguments:   - poly *a: pointer to output polynomial
+*              - const uint8_t seed[]: byte array with seed of length 32
+*              - uint16_t nonce: 2-byte nonce
+**************************************************/
+#define POLY_UNIFORM_NBLOCKS ((768 + SHAKE128_RATE - 1)/SHAKE128_RATE)
+void poly_uniform(poly *a,
+                  const uint8_t seed[32],
+                  uint16_t nonce)
+{
+    unsigned int i, ctr, off;
+    unsigned int buflen = POLY_UNIFORM_NBLOCKS*SHAKE128_RATE;
+    uint8_t buf[POLY_UNIFORM_NBLOCKS*SHAKE128_RATE + 2];
+    keccak_state state;
+
+    shake128_init(&state);
+    shake128_absorb(&state, seed, 32);
+    shake128_absorb(&state, (uint8_t *)&nonce, 2);
+    shake128_finalize(&state);
+    shake128_squeezeblocks(buf, POLY_UNIFORM_NBLOCKS, &state);
+
+    ctr = rej_uniform(a->coeffs, DILITHIUM_N, buf, buflen);
+
+    while(ctr < DILITHIUM_N) {
+        off = buflen % 3;
+        for(i = 0; i < off; ++i)
+            buf[i] = buf[buflen - off + i];
+
+        shake128_squeezeblocks(buf + off, 1, &state);
+        buflen = SHAKE128_RATE + off;
+        ctr += rej_uniform(a->coeffs + ctr, DILITHIUM_N - ctr, buf, buflen);
+    }
+}
+
+/*************************************************
+* Name:        expand_a_row
+*
+* Description: Expand one row of the matrix A from seed rho
+*
+* Arguments:   - poly *row: pointer to output polynomial array (L elements)
+*              - const uint8_t rho[32]: seed
+*              - uint8_t i: row index
+*              - unsigned int L: number of columns
+**************************************************/
+void expand_a_row(poly *row, const uint8_t rho[32], uint8_t i, unsigned int L) {
+    unsigned int j;
+    for(j = 0; j < L; ++j) {
+        uint16_t nonce = (i << 8) | j;
+        poly_uniform(&row[j], rho, nonce);
+    }
+}
+
+/*************************************************
+* Name:        expand_a
+*
+* Description: Expand matrix A from seed rho according to FIPS 204.
+*              Generates a K×L matrix of polynomials using SHAKE-128.
+*
+* Arguments:   - poly *A: pointer to output matrix (K*L elements, row-major)
+*              - const uint8_t rho[32]: 32-byte seed
+*              - unsigned int K: number of rows
+*              - unsigned int L: number of columns
+**************************************************/
+void expand_a(poly *A, const uint8_t rho[32], unsigned int K, unsigned int L) {
+    unsigned int i;
+    for(i = 0; i < K; ++i) {
+        expand_a_row(&A[i * L], rho, i, L);
     }
 }

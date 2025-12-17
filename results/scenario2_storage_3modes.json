@@ -1,0 +1,38 @@
+[
+  {
+    "n_parties": 20,
+    "threshold": 20,
+    "mode": "independent",
+    "public_key_size": 1952,
+    "signature_size": 3293,
+    "total_communication_bytes": 0,
+    "pk_compression_ratio": 1.0,
+    "sig_compression_ratio": 1.0,
+    "comm_overhead_ratio": 1.0,
+    "security_level": "Dilithium3"
+  },
+  {
+    "n_parties": 20,
+    "threshold": 20,
+    "mode": "threshold_full_t=20",
+    "public_key_size": 3104,
+    "signature_size": 4096,
+    "total_communication_bytes": 62080,
+    "pk_compression_ratio": 0.6288659793814433,
+    "sig_compression_ratio": 0.803955078125,
+    "comm_overhead_ratio": 1.0,
+    "security_level": "Dilithium3"
+  },
+  {
+    "n_parties": 20,
+    "threshold": 13,
+    "mode": "threshold_flex_t=13",
+    "public_key_size": 3104,
+    "signature_size": 4096,
+    "total_communication_bytes": 40352,
+    "pk_compression_ratio": 0.6288659793814433,
+    "sig_compression_ratio": 0.803955078125,
+    "comm_overhead_ratio": 1.0,
+    "security_level": "Dilithium3"
+  }
+]

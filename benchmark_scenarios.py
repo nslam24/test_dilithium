@@ -433,7 +433,15 @@ class Scenario2_Storage:
         os.makedirs(output_dir, exist_ok=True)
     
     def measure_independent(self, n: int, message: bytes) -> StorageMetrics:
-        """Mode A: Independent"""
+        """Mode A: Independent
+        
+        NOTE: Reports PER-USER sizes for fair comparison:
+        - public_key_size: size of 1 public key (not N keys)
+        - signature_size: size of 1 signature (not N signatures)
+        - total_communication_bytes: 0 (no interaction needed)
+        
+        To get total storage: multiply by N
+        """
         import oqs
         
         keys = []
@@ -452,12 +460,16 @@ class Scenario2_Storage:
         # No communication needed (independent signing)
         comm_bytes = 0
         
+        # Report average per-user sizes for fair comparison
+        avg_pk_size = sum(pk_sizes) // n if n > 0 else 0
+        avg_sig_size = sum(sig_sizes) // n if n > 0 else 0
+        
         return StorageMetrics(
             n_parties=n,
             threshold=n,
             mode="independent",
-            public_key_size=sum(pk_sizes),
-            signature_size=sum(sig_sizes),
+            public_key_size=avg_pk_size,  # Per-user, not total
+            signature_size=avg_sig_size,  # Per-user, not total
             total_communication_bytes=comm_bytes
         )
     
@@ -470,7 +482,10 @@ class Scenario2_Storage:
         
         # Sign
         sig, metadata = sign_threshold(message, sk_shares[:t], pk)
-        sig_size = len(str(sig))  # Approximate
+        
+        # [FIX] Tính kích thước signature chính xác từ metadata
+        # Signature gồm (z_compact + c_poly) sau tối ưu hóa
+        sig_size = sig.get('_sig_size_bytes', len(str(sig)))  # Use actual size if available
         
         # Communication: t participants exchange commitments + responses
         # Round 1: t * 32 bytes (commitments)

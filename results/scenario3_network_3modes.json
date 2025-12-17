@@ -1,0 +1,80 @@
+[
+  {
+    "n_parties": 10,
+    "threshold": 10,
+    "mode": "threshold_full_t=10",
+    "latency_ms": 0,
+    "packet_loss_percent": 0,
+    "end_to_end_time": 0.6761351912282407,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 7.2887693010270596,
+    "overhead_factor": 0.09276397198261806
+  },
+  {
+    "n_parties": 10,
+    "threshold": 6,
+    "mode": "threshold_flex_t=6",
+    "latency_ms": 0,
+    "packet_loss_percent": 0,
+    "end_to_end_time": 0.3103748122230172,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 0.4268452599644661,
+    "overhead_factor": 0.7271366027324638
+  },
+  {
+    "n_parties": 10,
+    "threshold": 10,
+    "mode": "threshold_full_t=10",
+    "latency_ms": 20,
+    "packet_loss_percent": 0,
+    "end_to_end_time": 4.0683543952181935,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 1.9503154186531901,
+    "overhead_factor": 2.0859981705049724
+  },
+  {
+    "n_parties": 10,
+    "threshold": 6,
+    "mode": "threshold_flex_t=6",
+    "latency_ms": 20,
+    "packet_loss_percent": 0,
+    "end_to_end_time": 0.6073179361410439,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 0.8493777210824192,
+    "overhead_factor": 0.715015147050358
+  },
+  {
+    "n_parties": 10,
+    "threshold": 10,
+    "mode": "threshold_full_t=10",
+    "latency_ms": 100,
+    "packet_loss_percent": 1.0,
+    "end_to_end_time": 5.5615742248483,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 1.0952799119986594,
+    "overhead_factor": 5.077765203142982
+  },
+  {
+    "n_parties": 10,
+    "threshold": 6,
+    "mode": "threshold_flex_t=6",
+    "latency_ms": 100,
+    "packet_loss_percent": 1.0,
+    "end_to_end_time": 1.6937648649327457,
+    "interaction_rounds": 2,
+    "timeouts": 0,
+    "retransmissions": 0,
+    "baseline_time": 0.8490699520334601,
+    "overhead_factor": 1.9948472571385942
+  }
+]

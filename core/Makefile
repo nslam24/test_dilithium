@@ -5,7 +5,7 @@ CFLAGS = -O3 -Wall -Wextra -fPIC -march=native
 LDFLAGS = -shared
 
 TARGET = libdilithium_ntt.so
-SRC = dilithium_ntt.c
+SRC = dilithium_ntt.c fips202.c
 
 all: $(TARGET)
 
