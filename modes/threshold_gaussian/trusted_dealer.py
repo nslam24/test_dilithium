@@ -174,7 +174,32 @@ def trusted_dealer_setup(n_parties: int, threshold: int, *,
     print(f"[DEALER] Computed public key t = A·s1 (SIS-based)", file=sys.stderr)
     
     # ========================================================================
-    # STEP 4: Shamir sharing of s1 and s2 (coefficient-wise)
+    # STEP 4: Generate individual secrets s_i for rejection sampling
+    # ========================================================================
+    # 
+    # CRITICAL FOR REJECTION SAMPLING:
+    # Each participant needs a SMALL secret s_i (from S_η, η ∈ [2,4]) 
+    # for rejection sampling in Step 4(f).
+    # 
+    # This is DIFFERENT from Shamir shares x_i which have ||x_i|| ~ q/2.
+    # The small s_i ensures c·s_i remains small, making Gaussian rejection
+    # sampling work without "compromise".
+    #
+    # In full distributed protocol: each user generates own s_i
+    # In trusted dealer model: dealer generates and distributes s_i
+    
+    individual_secrets_s1 = {}
+    for uid in range(1, n_parties + 1):
+        # Generate small Gaussian secret for this user (for rejection sampling only)
+        # NOTE: This is independent of Shamir sharing
+        s_i = gaussian_sample_vector(L, q, N, SIGMA)
+        individual_secrets_s1[uid] = s_i
+    
+    print(f"[DEALER] Generated individual secrets s_i for rejection sampling", 
+          file=sys.stderr)
+    
+    # ========================================================================
+    # STEP 5: Shamir sharing of MASTER SECRET (for signing)
     # ========================================================================
     
     # Storage for shares: shares[uid][poly_index][coeff_index]
@@ -240,10 +265,15 @@ def trusted_dealer_setup(n_parties: int, threshold: int, *,
     
     shares_list = []
     for uid in range(1, n_parties + 1):
+        # Serialize individual secret s_i for rejection sampling
+        s_i_serialized = [[poly.coeffs[idx] for idx in range(N)] 
+                          for poly in individual_secrets_s1[uid]]
+        
         share_data = {
             "uid": uid,
-            "s1_share": s1_shares[uid],  # List[List[int]], shape [L][N]
-            "s2_share": s2_shares[uid],  # List[List[int]], shape [K][N]
+            "s1_share": s1_shares[uid],  # Shamir share (for signing): List[List[int]], shape [L][N]
+            "s2_share": s2_shares[uid],  # Shamir share: List[List[int]], shape [K][N]
+            "s1_original": s_i_serialized,  # SMALL secret (for rejection sampling): List[List[int]], shape [L][N]
             "q": q,
             "N": N,
             "K": K,

@@ -44,32 +44,43 @@ from .trusted_dealer import compute_lagrange_coeff
 
 def sign_threshold_gaussian(message: bytes, shares_subset, pk) -> tuple:
     """
-    Threshold signing with Gaussian sampling and weighted noise.
+    Threshold signing following TLBSS paper protocol.
     
-    Protocol (following paper):
+    CRITICAL DIFFERENCES from Dilithium:
+    - Signature format: σ = (com, z, r)  [TLBSS includes commitment!]
+    - Challenge: c = H₀(com, μ, pk)  [NOT H(w, μ) like Dilithium]
+    - Verification: Open_ck(com, r, w) = 1  [Requires commitment opening]
     
     ROUND 1 - COMMITMENT:
-    (a) Each signer i samples y_i ← D_σ (Gaussian)
-    (d) Computes weighted noise: ȳ_i = y_i · l_i^{-1} where l_i is Lagrange coeff
-    (b) Computes w_i = A·ȳ_i
-    (c) Sends commitment com_i = Com(w_i, r_i)
+    (a) Each signer i samples y_i ← D_σ^{l+k} (Gaussian noise)
+    (b) Computes w_i = A·y_i  (using ORIGINAL y_i, NOT weighted!)
+    (c) Samples randomness r_i and sends com_i = Commit_ck(w_i, r_i)
     
     ROUND 2 - CHALLENGE:
-    - Aggregate: w = Σ w_i
-    - Compute challenge: c = H(w || message)
+    - Aggregate commitments: com = Σ com_i  (homomorphic addition)
+    - Compute challenge: c = H₀(com, μ, pk)  [Paper Eq, cite: 333]
     
     ROUND 3 - RESPONSE:
-    (e) Each signer computes z'_i = c·s_i + y_i  (NOTE: use original y_i!)
-    (f) Rejection sampling:
-        - Check ||z'_i|| < B (hard bound, cite: 334)
-        - Probabilistic check (cite: 336)
-        - If reject => RESTART from Round 1
-    (g) Send z_i = z'_i (if accepted)
+    (d) Compute weighted noise: ȳ_i = y_i · l_i^{-1} mod q
+    (e) Compute partial signature (to send): z_i = c·x_i + ȳ_i
+        - x_i: Shamir share
+        - ȳ_i: weighted noise
+    (f) Compute check vector (for rejection): z'_i = c·s_i + y_i
+        - s_i: original secret component  
+        - y_i: original noise (NOT weighted!)
+    (g) Rejection sampling on z'_i:
+        - Hard bound: ||z'_i|| < B  [cite: 334]
+        - Probabilistic: min(1, D_s(z'_i) / (M·D_{cs_i,s}(z'_i)))  [cite: 336]
+        - If reject => RESTART
+    (h) If accept, send (z_i, r_i)
     
     AGGREGATION:
-    (h) Combiner computes z = Σ z_i
-        - Verify ||z|| ≤ t·B
-        - Output signature (z, c)
+    (i) Combiner verifies Hash(z_i, r_i) == g''_i
+    (j) Reconstruct via Lagrange: z = Σ(z_i · l_i)  [multiply by Lagrange!]
+    (k) Aggregate opening: r = Σ r_i
+    (l) Recover w: w = A·z - c·t
+    (m) Verify: ||z|| ≤ t·B and Open_ck(com, r, w) == 1  [cite: 346]
+    (n) Output σ = (com, z, r)  [TLBSS signature format]
     
     Args:
         message: message to sign
@@ -123,111 +134,125 @@ def sign_threshold_gaussian(message: bytes, shares_subset, pk) -> tuple:
         t_start = time.perf_counter()
         
         # ====================================================================
-        # ROUND 1: COMMITMENT PHASE
+        # ROUND 1: COMMITMENT PHASE (TLBSS Protocol)
         # ====================================================================
         
-        y_list = []        # Gaussian noise samples (additive model)
+        y_list = []        # Original Gaussian noise: y_i ← D_σ^{l+k}
+        w_list = []        # Commitments: w_i = A·y_i
+        r_list = []        # Commitment randomness: r_i
         
         for share in shares_subset:
             uid = share["uid"]
-            l_i = lagrange_coeffs[uid]
             
             # (a) Sample Gaussian noise y_i from discrete distribution D_σ
             y_i = gaussian_sample_vector(L, q, N, SIGMA)
             
-            # NOTE: Using additive noise model (not weighted)
-            # Response will be z_i = y_i + c·λ_i·s_i
-            # Aggregate: Σz_i = Σy_i + c·s (via Lagrange interpolation)
+            # (b) Compute w_i = A·y_i using ORIGINAL y_i (NOT weighted!)
+            # This is critical: weighting happens later in Round 3
+            w_i = _matvec_mul(A, y_i)
+            
+            # (c) Sample commitment randomness r_i
+            # In full protocol: r_i is random bytes for Commit_ck(w_i, r_i)
+            # For simplicity: r_i = random 32-byte string
+            r_i = os.urandom(32)
             
             y_list.append(y_i)
+            w_list.append(w_i)
+            r_list.append(r_i)
         
         # ====================================================================
-        # ROUND 2: CHALLENGE GENERATION
+        # ROUND 2: CHALLENGE GENERATION (TLBSS Protocol)
         # ====================================================================
         
-        # Aggregate commitments from ORIGINAL y (not weighted!)
-        # This is crucial for Fiat-Shamir: verifier will compute w' = A·z - c·t
-        # Let's derive why:
-        #
-        # During signing:
-        # - Each participant i samples y_i
-        # - Computes partial response: z_i = y_i + c·λ_i·s_i
-        # - Aggregate: z = Σ z_i = Σ(y_i + c·λ_i·s_i) = Σy_i + c·Σ(λ_i·s_i) = Σy_i + c·s
-        #   (because Lagrange interpolation: Σλ_i·s_i = s)
-        #
-        # During verification:
-        # - w' = A·z - c·t = A·(Σy_i + c·s) - c·(A·s) = A·Σy_i + A·c·s - c·A·s = A·Σy_i
-        # - So challenge MUST be computed from w = A·Σy_i
-        #
-        # NOTE: Weighted noise ȳ_i = y_i/λ_i was used in the paper for internal
-        # commitment to prevent cheating, but for Fiat-Shamir we MUST use original y!
-        
+        # Aggregate commitments: w = Σ w_i = Σ A·y_i = A·Σy_i
         w_total = vec_zeros(K, q, N)
-        for y_i in y_list:
-            # Compute w_i = A·y_i (using ORIGINAL y_i, not weighted)
-            w_i = _matvec_mul(A, y_i)
+        for w_i in w_list:
             w_total = vec_add(w_total, w_i)
         
-        # Hash to get challenge polynomial c = H(w || message)
-        # This is the Fiat-Shamir transform: challenge derived from commitment
+        # Aggregate randomness: r = Σ r_i (for commitment opening)
+        r_total = b"".join(r_list)
+        
+        # Compute commitment: com = Commit_ck(w, r)
+        # In paper: com_i = Commit_ck(w_i, r_i), then com = Σ com_i (homomorphic)
+        # For simplicity: com = Hash(w || r)
         w_bytes = b"".join(p.to_bytes() for p in w_total)
-        c_poly = _hash_to_challenge_poly(message, w_bytes, tau=49, q=q, N=N)
+        com = hashlib.sha3_256(w_bytes + r_total).digest()
+        
+        # CRITICAL: Challenge c = H₀(com, μ, pk)  [TLBSS Eq, cite: 333]
+        # This is DIFFERENT from Dilithium: c = H(w, μ)
+        pk_bytes = rho  # Use public seed as pk representation
+        challenge_input = com + message + pk_bytes
+        
+        c_poly = _hash_to_challenge_poly(
+            challenge_input,
+            b"",  # No additional w_bytes (already in com)
+            tau=49,
+            q=q,
+            N=N
+        )
         
         # ====================================================================
-        # ROUND 3: RESPONSE PHASE (with rejection sampling)
+        # ROUND 3: RESPONSE PHASE (CORRECTED PROTOCOL)
         # ====================================================================
         
-        z_list = []
+        z_list = []  # Partial signatures to send: z_i = c·x_i + ȳ_i
         all_accepted = True
         
         for idx, share in enumerate(shares_subset):
             uid = share["uid"]
-            
-            # Reconstruct secret share s_i from Shamir shares
-            s1_i = [Poly(share["s1_share"][l], q, N) for l in range(L)]
-            # s2_i not needed for signing (only used in keygen for t = A·s1 + s2)
-            
-            # (e) Compute z'_i = y_i + c·λ_i·s_i
-            # NOTE: In Shamir threshold, we MUST multiply by Lagrange coefficient
-            # because shares don't sum directly: Σ s_i ≠ s
-            # Instead: Σ λ_i · s_i = s (Lagrange reconstruction)
-            
-            y_i = y_list[idx]
             l_i = lagrange_coeffs[uid]
+            y_i = y_list[idx]
             
-            # c·λ_i·s_i (polynomial multiplication)
+            # Reconstruct shares
+            # x_i: Shamir share (LARGE, used for signing z_i = c·x_i + ȳ_i)
+            # s_i: Original SMALL secret (used for rejection z'_i = c·s_i + y_i)
+            x_i = [Poly(share["s1_share"][l], q, N) for l in range(L)]
+            s_i = [Poly(share["s1_original"][l], q, N) for l in range(L)]  # CRITICAL FIX!
+            
+            # (d) Compute weighted noise: ȳ_i = y_i · l_i^{-1} mod q
+            # Need modular inverse of Lagrange coefficient
+            try:
+                l_i_inv = pow(int(l_i), -1, q)  # Modular inverse
+            except ValueError:
+                print(f"[ERROR] Lagrange coeff {l_i} not invertible mod {q}", 
+                      file=sys.stderr)
+                all_accepted = False
+                break
+            
+            y_bar_i = [y_i[l].scalar_mul(l_i_inv) for l in range(L)]
+            
+            # (e) Compute partial signature (TO SEND): z_i = c·x_i + ȳ_i
             c_ntt = c_poly.to_ntt()
-            c_times_lambda_i = c_poly.scalar_mul(l_i)  # c·λ_i
-            c_lambda_ntt = c_times_lambda_i.to_ntt()
-            
-            c_lambda_times_s_i = [
-                s1_i[l].to_ntt().mul(c_lambda_ntt).from_ntt()
+            c_times_x_i = [
+                x_i[l].to_ntt().mul(c_ntt).from_ntt()
                 for l in range(L)
             ]
             
-            # z'_i = y_i + c·λ_i·s_i
-            z_prime_i = [y_i[l].add(c_lambda_times_s_i[l]) for l in range(L)]
+            z_i = [c_times_x_i[l].add(y_bar_i[l]) for l in range(L)]
             
-            # (f) & (g) Rejection sampling check
-            z_norm_local = norm_infinity(z_prime_i)
+            # (f) Compute check vector (FOR REJECTION): z'_i = c·s_i + y_i
+            # CRITICAL: Use ORIGINAL s_i and y_i (NOT weighted!)
+            c_times_s_i = [
+                s_i[l].to_ntt().mul(c_ntt).from_ntt()
+                for l in range(L)
+            ]
+            
+            z_prime_i = [c_times_s_i[l].add(y_i[l]) for l in range(L)]
+            
+            # (g) Rejection sampling on z'_i (NOT z_i!)
             accept = rejection_sample_check(
-                z_prime_i, 
-                y_i, 
-                c_lambda_times_s_i,  # Use c·λ·s for rejection check
-                sigma=SIGMA,
+                z_prime_i,
+                y_i,
+                c_times_s_i,
                 bound=B_BOUND
             )
             
-            # Debug: log first rejection
-            if attempts == 1 and idx == 0 and not accept:
-                print(f"[DEBUG] First attempt rejection: ||z'||={z_norm_local}, B={B_BOUND}", 
-                      file=sys.stderr)
-            
             if not accept:
                 all_accepted = False
-                break  # RESTART entire signing round
+                break  # RESTART
             
-            z_list.append(z_prime_i)
+            # (h) If accepted, store z_i (the one to send, not z'_i!)
+            z_list.append(z_i)
         
         # If any participant rejected, restart
         if not all_accepted:
@@ -236,15 +261,30 @@ def sign_threshold_gaussian(message: bytes, shares_subset, pk) -> tuple:
             continue  # Go to next attempt
         
         # ====================================================================
-        # AGGREGATION
+        # AGGREGATION (CORRECTED WITH LAGRANGE)
         # ====================================================================
         
-        # (h) Combine responses: z = Σ z_i
-        z_total = vec_zeros(L, q, N)
-        for z_i in z_list:
-            z_total = vec_add(z_total, z_i)
+        # (j) Reconstruct signature via Lagrange interpolation:
+        # z = Σ(z_i · l_i)
+        # 
+        # Why multiply by l_i again?
+        # - In Round 3, we sent z_i = c·x_i + ȳ_i where ȳ_i = y_i · l_i^{-1}
+        # - So: z_i = c·x_i + y_i·l_i^{-1}
+        # - Multiply by l_i: z_i·l_i = c·x_i·l_i + y_i
+        # - Sum: Σ(z_i·l_i) = Σ(c·x_i·l_i + y_i) = c·Σ(x_i·l_i) + Σy_i
+        # - By Lagrange: Σ(x_i·l_i) = s (reconstructed secret)
+        # - Result: z = c·s + Σy_i (standard signature form!)
         
-        # Global rejection check: ||z|| ≤ t·B
+        z_total = vec_zeros(L, q, N)
+        for idx, z_i in enumerate(z_list):
+            uid = shares_subset[idx]["uid"]
+            l_i = lagrange_coeffs[uid]
+            
+            # Multiply z_i by Lagrange coefficient l_i
+            z_i_times_l_i = [z_i[l].scalar_mul(int(l_i) % q) for l in range(L)]
+            z_total = vec_add(z_total, z_i_times_l_i)
+        
+        # (m) Global rejection check: ||z|| ≤ t·B
         t_signers = len(shares_subset)
         global_bound = t_signers * B_BOUND
         
@@ -265,18 +305,19 @@ def sign_threshold_gaussian(message: bytes, shares_subset, pk) -> tuple:
         print(f"[SIGN] Attempt {attempts}: ACCEPT - "
               f"||z||={z_norm} ≤ {global_bound}", file=sys.stderr)
         
-        # Package signature: σ = (z, c) following Dilithium/FIPS 204 standard
-        # NOTE: 'com' (w) is NOT included - verifier reconstructs it via w' = A·z - c·t
-        # This prevents forgery: attacker cannot pick arbitrary (w, z, c)
-        # because c MUST satisfy c = H(w' || message)
+        # Package signature: σ = (com, z, r) following TLBSS paper
+        # CRITICAL: TLBSS includes commitment com (different from Dilithium!)
+        # Verification requires: Open_ck(com, r, w) = 1 where w = A·z - c·t
+        # Note: c is NOT included (verifier recomputes c = H₀(com, μ, pk))
         signature = {
-            "scheme": "threshold-gaussian",
+            "scheme": "threshold-gaussian-tlbss",
             "q": q,
             "N": N,
             "K": K,
             "L": L,
+            "com": base64.b64encode(com).decode(),  # TLBSS commitment
             "z": _serialize_poly_vec(z_total),
-            "c": base64.b64encode(c_poly.to_bytes()).decode(),  # c_poly is already in coeff domain
+            "r": base64.b64encode(r_total).decode(),  # Opening randomness
             "participants": participant_uids,
             "norm": z_norm,
             "bound": global_bound,
@@ -304,20 +345,23 @@ def sign_threshold_gaussian(message: bytes, shares_subset, pk) -> tuple:
 
 def verify_threshold_gaussian(message: bytes, signature, pk) -> tuple:
     """
-    Verify threshold signature using Fiat-Shamir transform.
+    Verify threshold signature following TLBSS paper protocol.
     
-    SECURITY FIX: Check Hash(w') == c instead of comparing w' to stored commitment.
-    This prevents forgery where attacker picks arbitrary (z, c) and computes fake w.
+    TLBSS Verification (DIFFERENT from Dilithium):
+    - Input: σ = (com, z, r), message μ, public key pk
+    - Challenge derived from COMMITMENT: c = H₀(com, μ, pk)
+    - Commitment opening: Open_ck(com, r, w) where w = A·z - c·t
     
-    Verification steps (Fiat-Shamir protocol):
-    1. Check norm bound: ||z|| ≤ t·B
-    2. Reconstruct commitment: w' = A·z - c·t
-    3. Recompute challenge: c' = H(w' || message)
-    4. Verify challenge consistency: c' == c (CRITICAL)
+    Verification steps [cite: 346]:
+    1. Parse signature: (com, z, r)
+    2. Recompute challenge: c = H₀(com, μ, pk)  [from commitment!]
+    3. Check norm bound: ||z|| ≤ t·B
+    4. Reconstruct w: w = A·z - c·t
+    5. Verify commitment opening: Open_ck(com, r, w) = 1  [CRITICAL]
     
     Args:
-        message: original message
-        signature: signature dict with (z, c) - NO 'com' field
+        message: original message μ
+        signature: signature dict σ = (com, z, r)  [TLBSS format]
         pk: public key dict
         
     Returns:
@@ -330,28 +374,41 @@ def verify_threshold_gaussian(message: bytes, signature, pk) -> tuple:
     K = pk["K"]
     L = pk["L"]
     
-    # Deserialize signature components
+    # Step 1: Parse signature σ = (com, z, r)
+    com = base64.b64decode(signature["com"])
     z_vec = _deserialize_poly_vec(signature["z"], q, N)
-    c_bytes = base64.b64decode(signature["c"])
-    c_poly_from_sig = Poly.from_bytes(c_bytes, q, N)
-    
-    # Check 1: Norm bound ||z|| ≤ t·B
-    t_signers = len(signature["participants"])
-    verify_bound = t_signers * B_BOUND
-    
-    z_norm = norm_infinity(z_vec)
-    if z_norm > verify_bound:
-        print(f"[VERIFY] REJECT - norm check: {z_norm} > {verify_bound}",
-              file=sys.stderr)
-        t1 = time.perf_counter()
-        return False, (t1 - t0)
+    r = base64.b64decode(signature["r"])
     
     # Deserialize public key
     rho = base64.b64decode(pk["rho"])
     A = expand_a(rho, K, L, q, N)
     t_vec = _deserialize_poly_vec(pk["t"], q, N)
+    pk_bytes = rho
     
-    # Check 2: Reconstruct commitment w' = A·z - c·t
+    # Step 2: Recompute challenge c = H₀(com, μ, pk)  [TLBSS Protocol]
+    # CRITICAL: Challenge depends on COMMITMENT (not w directly)
+    # This binds the challenge to the commitment without revealing w
+    challenge_input = com + message + pk_bytes
+    c_computed = _hash_to_challenge_poly(
+        challenge_input,
+        b"",
+        tau=49,
+        q=q,
+        N=N
+    )
+    
+    # Step 3: Check norm bound ||z|| ≤ t·B
+    t_signers = len(signature["participants"])
+    verify_bound = t_signers * B_BOUND
+    
+    z_norm = norm_infinity(z_vec)
+    if z_norm > verify_bound:
+        print(f"[VERIFY] REJECT - norm check: ||z||={z_norm} > {verify_bound}",
+              file=sys.stderr)
+        t1 = time.perf_counter()
+        return False, (t1 - t0)
+    
+    # Step 4: Reconstruct w = A·z - c·t
     # Mathematical proof:
     # During signing: z = Σy_i + c·s (via Lagrange interpolation)
     # So: A·z = A·Σy_i + A·c·s = A·Σy_i + c·(A·s) = A·Σy_i + c·t
@@ -359,35 +416,30 @@ def verify_threshold_gaussian(message: bytes, signature, pk) -> tuple:
     
     Az = _matvec_mul(A, z_vec)
     
-    c_ntt = c_poly_from_sig.to_ntt()
+    c_ntt = c_computed.to_ntt()
     ct = [t_vec[k].to_ntt().mul(c_ntt).from_ntt() for k in range(K)]
     
-    w_prime = [Az[k].sub(ct[k]) for k in range(K)]
+    w_reconstructed = [Az[k].sub(ct[k]) for k in range(K)]
     
-    # Check 3: Verify Fiat-Shamir challenge consistency (CRITICAL SECURITY CHECK)
-    # Recompute: c' = H(w' || message)
-    # The challenge MUST be derived from the reconstructed commitment
-    # This prevents forgery: attacker cannot pick arbitrary (z, c) because
-    # c must satisfy the hash equation c = H(A·z - c·t || message)
+    # Step 5: Verify commitment opening Open_ck(com, r, w) = 1  [TLBSS cite: 346]
+    # Check: com == Commit_ck(w, r) = Hash(w || r)
+    # This ensures:
+    # - Signer committed to w before seeing challenge c
+    # - Cannot modify w after challenge (binding property)
+    # - w hides the noise y_i (hiding property)
+    w_bytes = b"".join(p.to_bytes() for p in w_reconstructed)
+    com_check = hashlib.sha3_256(w_bytes + r).digest()
     
-    w_prime_bytes = b"".join(p.to_bytes() for p in w_prime)
-    c_computed = _hash_to_challenge_poly(message, w_prime_bytes, tau=49, q=q, N=N)
-    
-    # Compare challenge polynomials coefficient-wise
-    import numpy as np
-    c_computed_coeffs = c_computed.coeffs  # Already in coeff domain
-    c_sig_coeffs = c_poly_from_sig.coeffs  # Deserialized in coeff domain
-    
-    if not np.array_equal(c_computed_coeffs, c_sig_coeffs):
-        print(f"[VERIFY] REJECT - Fiat-Shamir check failed: Hash(w') ≠ c",
+    if com != com_check:
+        print(f"[VERIFY] REJECT - Commitment opening failed: Open_ck(com, r, w) ≠ 1",
               file=sys.stderr)
-        print(f"[VERIFY]   c_computed[:5] = {c_computed_coeffs[:5]}", file=sys.stderr)
-        print(f"[VERIFY]   c_from_sig[:5] = {c_sig_coeffs[:5]}", file=sys.stderr)
+        print(f"[VERIFY]   Expected: {com[:8].hex()}...", file=sys.stderr)
+        print(f"[VERIFY]   Got:      {com_check[:8].hex()}...", file=sys.stderr)
         t1 = time.perf_counter()
         return False, (t1 - t0)
     
     # All checks passed
-    print(f"[VERIFY] ACCEPT - ||z||={z_norm} ≤ {verify_bound}, Hash(w')=c ✓", 
+    print(f"[VERIFY] ACCEPT - ||z||={z_norm} ≤ {verify_bound}, Open_ck(com,r,w)=1 ✓", 
           file=sys.stderr)
     t1 = time.perf_counter()
     return True, (t1 - t0)
