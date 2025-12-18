@@ -506,6 +506,13 @@ def vec_add(a: List[Poly], b: List[Poly]) -> List[Poly]:
     return [ai.add(bi) for ai, bi in zip(a, b)]
 
 
+def vec_sub(a: List[Poly], b: List[Poly]) -> List[Poly]:
+    """Vector subtraction"""
+    if len(a) != len(b):
+        raise ValueError("Vector length mismatch")
+    return [ai.sub(bi) for ai, bi in zip(a, b)]
+
+
 def vec_zeros(k: int, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> List[Poly]:
     """Create zero vector"""
     return [Poly.zeros(q, N) for _ in range(k)]

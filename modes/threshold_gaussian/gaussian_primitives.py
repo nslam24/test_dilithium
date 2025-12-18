@@ -32,7 +32,7 @@ SIGMA = 261.0
 #   * Academic (tight): γ ∈ [1.1, 1.4] → low acceptance, high security
 #   * Practical: γ ∈ [1.5, 2.0] → better acceptance, adequate security
 # - We choose γ = 1.9 as practical compromise
-GAMMA = 1.9
+GAMMA = 1.2
 
 # m: Dimension of M-SIS problem (depends on parameters k, l)
 # For Dilithium-like schemes: m = k + l ≈ 6-8
@@ -70,13 +70,10 @@ B_BASE = int(GAMMA * SIGMA * np.sqrt(M_DIM * DILITHIUM_N))
 #   - Scale × 200: Reasonable acceptance (~30-50%)
 #   - Scale × 2000: Original user's value (too loose, security concern)
 #
-# We use × 200 as compromise:
-#   - Allows signing to complete in reasonable time
-#   - Maintains hard bound to prevent trivial leakage
-#   - Combined with probabilistic check for additional masking
+# We use × 1 for ADDITIVE mode (small secrets, no scaling needed)
 #
-SHAMIR_SCALE_FACTOR = 200 
-B_BOUND = int(SHAMIR_SCALE_FACTOR * B_BASE)
+B_BOUND = int(B_BASE)  # For additive mode with small secrets
+SHAMIR_SCALE_FACTOR = 1  # Not using Shamir mode
 
 # M_CONSTANT: Parameter for rejection sampling probability [Equation 18]
 # - Larger M => higher security, lower acceptance
@@ -85,7 +82,7 @@ B_BOUND = int(SHAMIR_SCALE_FACTOR * B_BASE)
 M_CONSTANT = 1.75
 
 print(f"[GAUSSIAN] Params: σ={SIGMA}, γ={GAMMA}, m={M_DIM}, N={DILITHIUM_N}", file=sys.stderr)
-print(f"[GAUSSIAN] Bounds: B_BASE={B_BASE}, B_THRESHOLD={B_BOUND} (×{SHAMIR_SCALE_FACTOR} for Shamir)", file=sys.stderr)
+print(f"[GAUSSIAN] Bounds: B_BASE={B_BASE}, B_BOUND={B_BOUND} (additive mode)", file=sys.stderr)
 
 
 # ============================================================================
@@ -133,6 +130,25 @@ def gaussian_sample_vector(length: int, q: int = DILITHIUM_Q, N: int = DILITHIUM
     """Sample vector of Gaussian polynomials."""
     return [gaussian_sample_poly(q, N, sigma) for _ in range(length)]
 
+def sample_small_secret_poly(eta: int = 2, q: int = DILITHIUM_Q, N: int = DILITHIUM_N) -> Poly:
+    """
+    Sample polynomial from S_η (small secret distribution).
+    
+    Used for DKG: Each user's OWN small secret s_i.
+    Coefficients in [-eta, eta].
+    
+    Args:
+        eta: Bound (typically 2 or 4)
+        q: Modulus
+        N: Polynomial degree
+    
+    Returns:
+        Polynomial with small coefficients
+    """
+    coeffs = [random.randint(-eta, eta) for _ in range(N)]
+    coeffs_mod = [(c % q) for c in coeffs]
+    return Poly(coeffs_mod, q, N, in_ntt=False)
+
 def norm_infinity(poly_vec) -> int:
     """Compute infinity norm of polynomial vector."""
     max_coeff = 0
@@ -145,7 +161,7 @@ def norm_infinity(poly_vec) -> int:
 # REJECTION SAMPLING (Following Paper Equation 18)
 # ============================================================================
 
-def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA, bound: int = B_BOUND) -> bool:
+def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA, bound: int = B_BOUND, debug: bool = False) -> bool:
     """
     Rejection Sampling following Paper Step 4f [Equation 18, cite: 336]
     
@@ -175,6 +191,7 @@ def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA
         c_times_s: Product c·s_i (list of Poly objects, CRITICAL for probability)
         sigma: Gaussian standard deviation
         bound: Rejection bound B from Equation 9
+        debug: If True, print detailed rejection info
     
     Returns:
         True if accepted, False if rejected
@@ -191,7 +208,12 @@ def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA
     z_norm_sq = np.sum(z_coeffs_np ** 2)
     z_norm = np.sqrt(z_norm_sq)
     
+    if debug:
+        print(f'  [BOUND CHECK] ||z\'||₂ = {z_norm:.1f}, limit = {bound}', file=sys.stderr)
+    
     if z_norm >= bound:
+        if debug:
+            print(f'  ❌ REJECTED at HARD BOUND CHECK: {z_norm:.1f} >= {bound}', file=sys.stderr)
         return False  # Reject: exceeds hard bound
     
     # Step 2: Probabilistic Gaussian Check [Equation 18]
@@ -234,13 +256,20 @@ def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA
     # Exponent: (||y||² - ||z'||²) / (2σ²)
     exponent = (y_norm_sq - z_norm_sq) / (2 * sigma ** 2)
     
-    # DEBUG first 3 attempts
-    global _debug_count
-    if '_debug_count' not in globals():
-        _debug_count = 0
-    if _debug_count < 3:
-        print(f'\n[REJECT #{_debug_count+1}] ||y||²={y_norm_sq:,}, ||z\'||²={z_norm_sq:,}, exp={exponent:.2f}')
-        _debug_count += 1
+    if debug:
+        print(f'  [PROBABILISTIC CHECK]', file=sys.stderr)
+        print(f'    ||y||² = {y_norm_sq:,.0f}', file=sys.stderr)
+        print(f'    ||z\'||² = {z_norm_sq:,.0f}', file=sys.stderr)
+        print(f'    Exponent = (||y||² - ||z\'||²) / (2σ²) = {exponent:.2f}', file=sys.stderr)
+    
+    # DEBUG first 3 attempts (for non-debug mode)
+    if not debug:
+        global _debug_count
+        if '_debug_count' not in globals():
+            _debug_count = 0
+        if _debug_count < 3:
+            print(f'\n[REJECT #{_debug_count+1}] ||y||²={y_norm_sq:,}, ||z\'||²={z_norm_sq:,}, exp={exponent:.2f}')
+            _debug_count += 1
     
     # Repetition rate constant M
     # Typical choice: M ≈ 1 or M = exp(||c·s_max||² / (2σ²))
@@ -249,8 +278,12 @@ def rejection_sample_check(z_prime, y=None, c_times_s=None, sigma: float = SIGMA
     
     try:
         ratio = math.exp(exponent)
+        if debug:
+            print(f'    exp(exponent) = {ratio:.6e}', file=sys.stderr)
     except OverflowError:
         # Numerical overflow (very large exponent) → reject for safety
+        if debug:
+            print(f'    ❌ REJECTED: Overflow in exp({exponent})', file=sys.stderr)
         return False
     
     # Acceptance probability

@@ -5,12 +5,12 @@
     "mode": "threshold_full_t=10",
     "latency_ms": 0,
     "packet_loss_percent": 0,
-    "end_to_end_time": 0.6761351912282407,
+    "end_to_end_time": 0.38148137275129557,
     "interaction_rounds": 2,
     "timeouts": 0,
     "retransmissions": 0,
-    "baseline_time": 7.2887693010270596,
-    "overhead_factor": 0.09276397198261806
+    "baseline_time": 0.38240359583869576,
+    "overhead_factor": 0.9975883514238992
   },
   {
     "n_parties": 10,
@@ -18,12 +18,12 @@
     "mode": "threshold_flex_t=6",
     "latency_ms": 0,
     "packet_loss_percent": 0,
-    "end_to_end_time": 0.3103748122230172,
+    "end_to_end_time": 0.24826163426041603,
     "interaction_rounds": 2,
     "timeouts": 0,
     "retransmissions": 0,
-    "baseline_time": 0.4268452599644661,
-    "overhead_factor": 0.7271366027324638
+    "baseline_time": 0.24705928191542625,
+    "overhead_factor": 1.0048666552240744
   },
   {
     "n_parties": 10,
@@ -31,12 +31,12 @@
     "mode": "threshold_full_t=10",
     "latency_ms": 20,
     "packet_loss_percent": 0,
-    "end_to_end_time": 4.0683543952181935,
+    "end_to_end_time": 0.8393813413567841,
     "interaction_rounds": 2,
     "timeouts": 0,
     "retransmissions": 0,
-    "baseline_time": 1.9503154186531901,
-    "overhead_factor": 2.0859981705049724
+    "baseline_time": 0.3958301548846066,
+    "overhead_factor": 2.120559363653036
   },
   {
     "n_parties": 10,
@@ -44,12 +44,12 @@
     "mode": "threshold_flex_t=6",
     "latency_ms": 20,
     "packet_loss_percent": 0,
-    "end_to_end_time": 0.6073179361410439,
+    "end_to_end_time": 0.5414371169172227,
     "interaction_rounds": 2,
     "timeouts": 0,
     "retransmissions": 0,
-    "baseline_time": 0.8493777210824192,
-    "overhead_factor": 0.715015147050358
+    "baseline_time": 0.24694561026990414,
+    "overhead_factor": 2.1925359042642962
   },
   {
     "n_parties": 10,
@@ -57,12 +57,12 @@
     "mode": "threshold_full_t=10",
     "latency_ms": 100,
     "packet_loss_percent": 1.0,
-    "end_to_end_time": 5.5615742248483,
+    "end_to_end_time": 2.6398353977128863,
     "interaction_rounds": 2,
-    "timeouts": 0,
-    "retransmissions": 0,
-    "baseline_time": 1.0952799119986594,
-    "overhead_factor": 5.077765203142982
+    "timeouts": 1,
+    "retransmissions": 1,
+    "baseline_time": 0.3790278607048094,
+    "overhead_factor": 6.964752915007522
   },
   {
     "n_parties": 10,
@@ -70,11 +70,11 @@
     "mode": "threshold_flex_t=6",
     "latency_ms": 100,
     "packet_loss_percent": 1.0,
-    "end_to_end_time": 1.6937648649327457,
+    "end_to_end_time": 1.5061356076039374,
     "interaction_rounds": 2,
     "timeouts": 0,
     "retransmissions": 0,
-    "baseline_time": 0.8490699520334601,
-    "overhead_factor": 1.9948472571385942
+    "baseline_time": 0.2536946311593056,
+    "overhead_factor": 5.936805208377355
   }
 ]

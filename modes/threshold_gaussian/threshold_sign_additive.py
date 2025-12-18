@@ -5,37 +5,51 @@ threshold_sign_additive.py - ADDITIVE Threshold Signing for TLBSS
 ARCHITECTURE: Additive Reconstruction (n-of-n)
 ==============================================
 
-KEY DIFFERENCE from Shamir mode:
-- NO Lagrange interpolation (ȳ_i = y_i, NOT y_i·l_i^{-1})
-- Direct summation: z = Σ z_i where z_i = c·s_i + y_i
-- Each user uses their SMALL secret s_i (||s_i|| ~ 90)
+CORRECTED PROTOCOL (Following Paper Exactly):
+- Additive sharing: x_i = s_i (share equals secret component)
+- Lagrange coefficients: l_i = 1 for all i (n-of-n case)
+- Each user uses their SMALL secret s_i (||s_i|| ≈ 23, from S_η)
 - Rejection sampling WORKS because s_i is small!
 
-SIGNING PROTOCOL (TLBSS Section 3, Step 4):
-===========================================
+SIGNING PROTOCOL (TLBSS Section 3, Step 4 - CORRECTED):
+========================================================
 
 ROUND 1 - COMMITMENT:
-(a) Each signer i samples y_i ← D_σ^{K+L}
-(b) Computes w_i = A·y_i
+(a) Each signer i samples y_i ← D_σ^{L} (Gaussian noise, NOT weighted)
+(b) Computes w_i = A·y_i (using ORIGINAL y_i, not ȳ_i)
 (c) Samples randomness r_i
-(d) Sends com_i = Hash(w_i || r_i)
+(d) Computes commitment: com_i = Commit_ck(w_i, r_i)
+(e) Sends com_i
 
 ROUND 2 - CHALLENGE:
-(e) Aggregate: com = Σ com_i (simple XOR/addition)
-(f) Challenge: c = H₀(com, μ, pk)
+(f) Aggregate commitments (homomorphic): com = Σ com_i
+(g) Challenge: c = H₀(com, μ, pk)
 
 ROUND 3 - RESPONSE & REJECTION:
-(g) Compute response: z_i = c·s_i + y_i (NO WEIGHTING!)
-(h) Rejection check on z_i:
-    - Hard bound: ||z_i|| < B
-    - Probabilistic: P = (1/M)·exp((||y_i||² - ||z_i||²)/(2σ²))
-(i) If reject → RESTART, else send (z_i, r_i)
+(h) Compute weighted noise: ȳ_i = y_i · l_i^(-1) mod q
+    (In additive: l_i = 1, so ȳ_i = y_i)
+(i) Compute partial signature (TO SEND): z_i = c·x_i + ȳ_i
+    (In additive: x_i = s_i, so z_i = c·s_i + y_i)
+(j) Compute check vector (FOR REJECTION): z'_i = c·s_i + y_i
+    (In additive: z'_i = z_i, same as above)
+(k) Rejection Sampling on z'_i (NOT z_i!):
+    - Hard bound: ||z'_i|| < B
+    - Probabilistic: P ∝ exp((||y_i||² - ||z'_i||²)/(2σ²))
+(l) If REJECT → send RESTART, else send (z_i, r_i)
 
-AGGREGATION:
-(j) Reconstruct: z = Σ z_i (simple addition!)
-(k) Opening: r = Σ r_i
-(l) Verify bounds and commitment
-(m) Output: σ = (com, z, r)
+AGGREGATION (Combiner):
+(m) Lagrange interpolation: z = Σ(z_i · l_i)
+    (In additive: l_i = 1, so z = Σ z_i)
+(n) Aggregate randomness: r = Σ r_i
+(o) Global bound check: ||z|| ≤ t·B (t = n for additive)
+(p) Reconstruct w: w = A·z - c·t
+(q) Verify commitment: Open_ck(com, r, w) = 1
+(r) Output signature: σ = (com, z, r)
+
+KEY INSIGHT: In additive mode, protocol simplifies because:
+  - l_i = 1 (no weighting needed)
+  - x_i = s_i (shares are original secrets)
+  - z_i = z'_i (response equals check vector)
 """
 
 import sys
@@ -56,6 +70,13 @@ from .gaussian_primitives import (
     rejection_sample_check,
     SIGMA, 
     B_BOUND,
+)
+
+from .commitment_scheme import (
+    derive_commitment_key_from_message,
+    commit,
+    open_commitment,
+    sample_commitment_randomness,
 )
 
 
@@ -81,6 +102,7 @@ def sign_threshold_additive(message: bytes, shares, pk, max_attempts: int = 5000
     K = pk['K']
     L = pk['L']
     n = pk['n']
+    tau = pk.get('tau', 49)  # Challenge Hamming weight (default: Dilithium3)
     
     if len(shares) != n:
         raise ValueError(f'Additive mode requires ALL {n} users, got {len(shares)}')
@@ -96,128 +118,169 @@ def sign_threshold_additive(message: bytes, shares, pk, max_attempts: int = 5000
     # Message hash
     mu = hashlib.sha3_512(message).digest()
     
+    # Derive commitment key ck from message (dynamic, not static!)
+    pk_bytes_list = _serialize_poly_vec(t)
+    pk_bytes = ''.join(pk_bytes_list).encode()
+    ck_matrix = derive_commitment_key_from_message(mu, pk_bytes, K)
+    
     # Rejection sampling loop
     for attempt in range(1, max_attempts + 1):
-        # ROUND 1: Each user generates noise and commitment
+        # ====================================================================
+        # ROUND 1 - COMMITMENT
+        # ====================================================================
         user_data = []
-        w_total = vec_zeros(K, q, N)
-        com_parts = []
         
         for i, share in enumerate(shares):
             uid = share['uid']
-            s1_i = share['s1']
+            x_i = share['s1']  # In additive: x_i = s_i (share = secret component)
+            s_i = share['s1']  # s_i: original secret (same as x_i in additive)
             s2_i = share['s2']
             
-            # (a) Sample Gaussian noise y_i (NO WEIGHTING!)
+            # (a) Sample Gaussian noise y_i ← D_σ^L (NOT weighted yet!)
             y_i = gaussian_sample_vector(L, q, N, SIGMA)
             
-            # (b) Compute w_i = A·y_i
+            # (b) Compute w_i = A·y_i (using ORIGINAL y_i, not ȳ_i)
             w_i = _matvec_mul(A, y_i)
-            w_total = vec_add(w_total, w_i)
             
-            # (c) Sample randomness for commitment
-            r_i = hashlib.sha3_256(f'r_{uid}_{attempt}'.encode()).digest()
+            # (c) Sample randomness r_i for commitment
+            r_i = sample_commitment_randomness(K)
             
-            # (d) Commitment: Hash(w_i || r_i)
-            w_i_bytes_list = _serialize_poly_vec(w_i)
-            w_i_bytes = ''.join(w_i_bytes_list).encode()
-            com_i_bytes = hashlib.sha3_256(w_i_bytes + r_i).digest()
-            com_parts.append(com_i_bytes)
+            # (d) Lattice commitment: com_i = Commit_ck(w_i, r_i)
+            com_i = commit(ck_matrix, w_i, r_i, q, N)
             
             user_data.append({
                 'uid': uid,
-                's1': s1_i,
+                'x_i': x_i,     # Share (for computing z_i)
+                's_i': s_i,     # Original secret (for rejection check)
                 's2': s2_i,
-                'y': y_i,
-                'w': w_i,
-                'r': r_i,
-                'com': com_i_bytes
+                'y_i': y_i,     # Original noise (NOT weighted)
+                'w_i': w_i,
+                'r_i': r_i,
+                'com_i': com_i
             })
         
-        # ROUND 2: Aggregate commitment and compute challenge
-        # (e) Aggregate randomness: r_agg = XOR(r_i)
-        r_agg = user_data[0]['r']
+        # ====================================================================
+        # ROUND 2 - CHALLENGE
+        # ====================================================================
+        
+        # (f) Aggregate commitments (homomorphic addition)
+        com = user_data[0]['com_i']
         for data in user_data[1:]:
-            r_i = data['r']
-            r_agg = bytes(a ^ b for a, b in zip(r_agg, r_i))
+            com = vec_add(com, data['com_i'])
         
-        # Commitment: Hash(w_total || r_agg)
-        w_total_bytes_list = _serialize_poly_vec(w_total)
-        w_total_bytes = ''.join(w_total_bytes_list).encode()
-        com_aggregated = hashlib.sha3_256(w_total_bytes + r_agg).digest()
+        # Serialize commitment for challenge
+        com_bytes_list = _serialize_poly_vec(com)
+        com_bytes = ''.join(com_bytes_list).encode()
         
-        # (f) Challenge: c = H₀(com, μ, pk)
-        pk_bytes_list = _serialize_poly_vec(t)
-        pk_bytes = ''.join(pk_bytes_list).encode()
-        challenge_input = com_aggregated + mu + pk_bytes
-        # _hash_to_challenge_poly expects (message, w_bytes, tau, q, N)
-        c = _hash_to_challenge_poly(mu, challenge_input, tau=49, q=q, N=N)
+        # (g) Challenge: c = H₀(com, μ, pk)
+        challenge_input = com_bytes + mu + pk_bytes
+        c = _hash_to_challenge_poly(mu, challenge_input, tau=tau, q=q, N=N)
         
-        # ROUND 3: Compute responses and check rejection
-        z_parts = []
+        # ====================================================================
+        # ROUND 3 - RESPONSE & REJECTION SAMPLING
+        # ====================================================================
+        
+        z_parts = []  # Partial signatures to send
+        r_parts = []  # Randomness to send
         all_accepted = True
         
         for data in user_data:
-            s1_i = data['s1']
-            y_i = data['y']
+            x_i = data['x_i']   # Share (in additive: = s_i)
+            s_i = data['s_i']   # Original secret
+            y_i = data['y_i']   # Original noise
             
-            # (g) Response: z_i = c·s_i + y_i (NO LAGRANGE!)
-            c_times_s1_i = [c.mul(s1).from_ntt() for s1 in s1_i]
-            z_i = vec_add(c_times_s1_i, y_i)
+            # (h) Compute weighted noise: ȳ_i = y_i · l_i^(-1)
+            # In additive: l_i = 1, so ȳ_i = y_i (no change)
+            y_bar_i = y_i  # No weighting in additive mode
             
-            # (h) Rejection check
+            # (i) Compute partial signature (TO SEND): z_i = c·x_i + ȳ_i
+            # In additive: x_i = s_i and ȳ_i = y_i, so z_i = c·s_i + y_i
+            c_times_x_i = [c.mul(x_poly).from_ntt() for x_poly in x_i]
+            z_i = vec_add(c_times_x_i, y_bar_i)
+            
+            # (j) Compute check vector (FOR REJECTION): z'_i = c·s_i + y_i
+            # In additive: z'_i = z_i (same as above since x_i = s_i)
+            c_times_s_i = [c.mul(s_poly).from_ntt() for s_poly in s_i]
+            z_prime_i = vec_add(c_times_s_i, y_i)
+            
+            # (k) Rejection Sampling on z'_i (NOT z_i!)
+            # NOTE: In additive mode, z_i = z'_i, but we follow protocol strictly
             accepted = rejection_sample_check(
-                z_prime=z_i,
-                y=y_i,
-                c_times_s=c_times_s1_i,
+                z_prime=z_prime_i,  # Check vector (c·s_i + y_i)
+                y=y_i,              # Original noise
+                c_times_s=c_times_s_i,  # For probabilistic check
                 sigma=SIGMA,
                 bound=B_BOUND
             )
             
+            # (l) If REJECT → restart entire protocol
             if not accepted:
                 all_accepted = False
                 break
             
+            # Accept: store z_i and r_i to send
             z_parts.append(z_i)
+            r_parts.append(data['r_i'])
         
         if not all_accepted:
-            continue  # Restart
+            continue  # Restart from Round 1
         
-        # AGGREGATION: Direct summation (no Lagrange!)
-        # (j) z = Σ z_i
+        # ====================================================================
+        # AGGREGATION (Combiner)
+        # ====================================================================
+        
+        # (m) Lagrange interpolation: z = Σ(z_i · l_i)
+        # In additive: l_i = 1 for all i, so z = Σ z_i (simple sum)
         z = vec_zeros(L, q, N)
         for z_i in z_parts:
+            # l_i = 1 in additive mode, so just add
             z = vec_add(z, z_i)
         
-        # (k) r_agg already computed above
+        # (n) Aggregate randomness: r = Σ r_i
+        r = r_parts[0]
+        for r_i in r_parts[1:]:
+            r = vec_add(r, r_i)
         
-        # (l) Verify: w = A·z - c·t
+        # (o) Global bound check: ||z|| ≤ t·B (t = n for additive)
+        z_norm_inf = norm_infinity(z)
+        bound_limit = n * B_BOUND
+        
+        if z_norm_inf >= bound_limit:
+            print(f'[COMBINER] (o) REJECT - Global bound: ||z||={z_norm_inf} >= {n}·B={bound_limit}', 
+                  file=sys.stderr)
+            continue
+        
+        # (p) Reconstruct w: w = A·z - c·t
         Az = _matvec_mul(A, z)
         ct = [c.mul(t_poly).from_ntt() for t_poly in t]
         w_reconstructed = vec_add(Az, [poly.scalar_mul(-1) for poly in ct])
         
-        # Check bound
-        z_norm_inf = norm_infinity(z)
-        if z_norm_inf >= n * B_BOUND:
-            print(f'[SIGN-ADD] Bound check failed: ||z||_∞ = {z_norm_inf}', 
+        # (q) Verify commitment: Open_ck(com, r, w) = 1
+        # ⚡ CRITICAL SECURITY CHECK (TLBSS Step 4h)
+        # Prevents malicious signers from producing invalid responses
+        commitment_valid = open_commitment(
+            ck_matrix=ck_matrix,
+            com_vec=com,
+            r_vec=r,
+            x_vec=w_reconstructed,
+            q=q,
+            N=N
+        )
+        
+        if not commitment_valid:
+            print(f'[COMBINER] (q) REJECT - Open_ck failed (fraud detected!)', 
                   file=sys.stderr)
             continue
         
-        # (m) Verify commitment opening: Hash(w || r) == com
-        w_bytes_list = _serialize_poly_vec(w_reconstructed)
-        w_bytes = ''.join(w_bytes_list).encode()
-        com_check = hashlib.sha3_256(w_bytes + r_agg).digest()
+        # ====================================================================
+        # (r) SUCCESS - Output signature σ = (com, z, r)
+        # ====================================================================
         
-        if com_check != com_aggregated:
-            print(f'[SIGN-ADD] Commitment opening failed', file=sys.stderr)
-            continue
-        
-        # SUCCESS!
         signature = {
-            'com': com_aggregated,
-            'z': z,
-            'r': r_agg,
-            'c': c  # Include for debugging
+            'com': com,     # Aggregated commitment
+            'z': z,         # Aggregated response (Lagrange-interpolated)
+            'r': r,         # Aggregated randomness
+            'c': c          # Challenge (for debugging)
         }
         
         metadata = {
@@ -247,9 +310,10 @@ def verify_threshold_additive(message: bytes, signature, pk) -> tuple:
     Verification (TLBSS Section 3, Step 5):
     1. Parse σ = (com, z, r)
     2. Check ||z|| ≤ n·B (bound scaled by n)
-    3. Recompute c = H₀(com, μ, pk)
-    4. Compute w = A·z - c·t
-    5. Verify Open_ck(com, r, w) = 1
+    3. Derive ck = H₃(μ || pk) (dynamic!)
+    4. Recompute c = H₀(com, μ, pk)
+    5. Compute w = A·z - c·t
+    6. Verify Open_ck(com, r, w) = 1 ✓ LATTICE-BASED
     
     Args:
         message: Original message
@@ -264,6 +328,7 @@ def verify_threshold_additive(message: bytes, signature, pk) -> tuple:
     K = pk['K']
     L = pk['L']
     n = pk['n']
+    tau = pk.get('tau', 49)  # Challenge Hamming weight
     
     com = signature['com']
     z = signature['z']
@@ -278,15 +343,20 @@ def verify_threshold_additive(message: bytes, signature, pk) -> tuple:
     if z_norm_inf >= bound_limit:
         return False, {'error': 'bound_check_failed', 'norm': z_norm_inf}
     
-    # Step 3: Recompute challenge c = H₀(com, μ, pk)
+    # Step 3: Derive commitment key ck from message (SAME as signing!)
     mu = hashlib.sha3_512(message).digest()
     t = pk['t']
     pk_bytes_list = _serialize_poly_vec(t)
     pk_bytes = ''.join(pk_bytes_list).encode()
-    challenge_input = com + mu + pk_bytes
-    c = _hash_to_challenge_poly(mu, challenge_input, tau=49, q=q, N=N)
+    ck_matrix = derive_commitment_key_from_message(mu, pk_bytes, K)
     
-    # Step 4: Compute w = A·z - c·t
+    # Step 4: Recompute challenge c = H₀(com, μ, pk)
+    com_bytes_list = _serialize_poly_vec(com)
+    com_bytes = ''.join(com_bytes_list).encode()
+    challenge_input = com_bytes + mu + pk_bytes
+    c = _hash_to_challenge_poly(mu, challenge_input, tau=tau, q=q, N=N)
+    
+    # Step 5: Compute w = A·z - c·t
     rho = pk['rho']
     A = expand_a(rho, K, L, q, N)
     
@@ -294,12 +364,17 @@ def verify_threshold_additive(message: bytes, signature, pk) -> tuple:
     ct = [c.mul(t_poly).from_ntt() for t_poly in t]
     w = vec_add(Az, [poly.scalar_mul(-1) for poly in ct])
     
-    # Step 5: Verify Open_ck(com, r, w) = 1
-    w_bytes_list = _serialize_poly_vec(w)
-    w_bytes = ''.join(w_bytes_list).encode()
-    com_check = hashlib.sha3_256(w_bytes + r).digest()
+    # Step 6: Verify Open_ck(com, r, w) = 1 (LATTICE-BASED!)
+    commitment_valid = open_commitment(
+        ck_matrix=ck_matrix,
+        com_vec=com,
+        r_vec=r,
+        x_vec=w,
+        q=q,
+        N=N
+    )
     
-    if com_check != com:
-        return False, {'error': 'commitment_opening_failed'}
+    if not commitment_valid:
+        return False, {'error': 'open_commitment_failed'}
     
     return True, {'z_norm_inf': z_norm_inf, 'bound_limit': bound_limit}

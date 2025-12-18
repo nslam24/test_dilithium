@@ -1,7 +1,7 @@
 [
   {
-    "n_parties": 20,
-    "threshold": 20,
+    "n_parties": 10,
+    "threshold": 10,
     "mode": "independent",
     "public_key_size": 1952,
     "signature_size": 3293,
@@ -12,24 +12,24 @@
     "security_level": "Dilithium3"
   },
   {
-    "n_parties": 20,
-    "threshold": 20,
-    "mode": "threshold_full_t=20",
+    "n_parties": 10,
+    "threshold": 10,
+    "mode": "threshold_full_t=10",
     "public_key_size": 3104,
     "signature_size": 4096,
-    "total_communication_bytes": 62080,
+    "total_communication_bytes": 31040,
     "pk_compression_ratio": 0.6288659793814433,
     "sig_compression_ratio": 0.803955078125,
     "comm_overhead_ratio": 1.0,
     "security_level": "Dilithium3"
   },
   {
-    "n_parties": 20,
-    "threshold": 13,
-    "mode": "threshold_flex_t=13",
+    "n_parties": 10,
+    "threshold": 6,
+    "mode": "threshold_flex_t=6",
     "public_key_size": 3104,
     "signature_size": 4096,
-    "total_communication_bytes": 40352,
+    "total_communication_bytes": 18624,
     "pk_compression_ratio": 0.6288659793814433,
     "sig_compression_ratio": 0.803955078125,
     "comm_overhead_ratio": 1.0,
