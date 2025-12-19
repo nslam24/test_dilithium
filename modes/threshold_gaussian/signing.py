@@ -391,8 +391,18 @@ def aggregate_signatures_dkg(partial_sigs: list, pk: dict, message: bytes, debug
         else:
             r_total = vec_add(r_total, sig['r'])
     
-    # (e) Aggregate commitments: com = H(Σ com_i)
-    com = hashlib.sha3_256(b''.join(sig['com'] for sig in partial_sigs)).digest()
+    # (n) Aggregate commitment vectors: com_vec = Σ com_vec_i
+    com_vec_total = None
+    for sig in partial_sigs:
+        if com_vec_total is None:
+            com_vec_total = sig['com_vec']
+        else:
+            com_vec_total = vec_add(com_vec_total, sig['com_vec'])
+    
+    # Hash the aggregated commitment vector
+    com = hashlib.sha3_256(
+        ''.join(_serialize_poly_vec(com_vec_total)).encode()
+    ).digest()
     
     # (n) Global bound check
     z_norm_inf = norm_infinity(z)
@@ -468,24 +478,33 @@ def verify_threshold_dkg(signature: dict, message: bytes, pk: dict, debug: bool 
     
     # (p) Verify commitment
     ck = derive_commitment_key_from_message(message, pk_bytes, K, q, N)
-    # NOTE: Commitment verification may need adjustment for aggregate signature
-    # Skipping for now to focus on other metrics
-    # if not open_commitment(ck, com, r, w):
-    #     if debug:
-    #         print('[VERIFY] ❌ Commitment verification failed', file=sys.stderr)
-    #     return False
     
-    # Check norm (relaxed for aggregate)
+    # Verify commitment opening
+    com_vec = commit(ck, w, r)
+    com_bytes = hashlib.sha3_256(
+        ''.join(_serialize_poly_vec(com_vec)).encode()
+    ).digest()
+    
+    if com_bytes != com:
+        if debug:
+            print('[VERIFY] ❌ Commitment verification failed', file=sys.stderr)
+            print(f'  Expected: {com.hex()[:32]}...', file=sys.stderr)
+            print(f'  Got:      {com_bytes.hex()[:32]}...', file=sys.stderr)
+        return False
+    
+    # Check norm (scaled for threshold signatures)
     z_norm_inf = norm_infinity(z)
-    # NOTE: Need to scale bound for aggregate signatures
-    # Skipping strict check for benchmarking
-    # if z_norm_inf >= B_BOUND:
-    #     if debug:
-    #         print(f'[VERIFY] ❌ Norm check failed: {z_norm_inf} >= {B_BOUND}', file=sys.stderr)
-    #     return False
+    # For threshold signatures, bound may need adjustment
+    # Using 2 * B_BOUND as conservative estimate for aggregated signatures
+    threshold_bound = 2 * B_BOUND
+    
+    if z_norm_inf >= threshold_bound:
+        if debug:
+            print(f'[VERIFY] ❌ Norm check failed: {z_norm_inf} >= {threshold_bound}', file=sys.stderr)
+        return False
     
     if debug:
-        print(f'[VERIFY] ✓ Signature (||z||_∞={z_norm_inf})', file=sys.stderr)
+        print(f'[VERIFY] ✓ Signature valid (||z||_∞={z_norm_inf} < {threshold_bound})', file=sys.stderr)
     
     return True
 

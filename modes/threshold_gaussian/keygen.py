@@ -297,7 +297,7 @@ class DKGNode:
         
         return self.my_public_T
     
-    def get_keypair_info(self):
+    def get_keypair_info(self, pk_hash: str = None):
         """
         Lấy thông tin keypair sau DKG.
         
@@ -323,10 +323,19 @@ class DKGNode:
         - Nếu gửi chỉ với s_i → Mất tính chất threshold
         - ✓ Giải pháp: Check với s_i (nhỏ), gửi với x_i (lớn)
         
+        **[CRITICAL] PK_HASH BINDING**:
+        - pk_hash liên kết keypair với một Public Key cụ thể
+        - KHÔNG THỂ dùng keypair từ nhóm A để ký cho nhóm B
+        - Mỗi nhóm DKG tạo ra một "polynomial universe" riêng biệt
+        
+        Args:
+            pk_hash: Hash của public key (để bind keypair với PK)
+        
         Returns:
             Dict with dual secrets:
             {
                 'uid': User ID,
+                'pk_hash': Hash of bound public key,
                 # SMALL SECRETS (for checking):
                 'small_secret_s1': s1_i,
                 'small_secret_s2': s2_i,
@@ -339,6 +348,7 @@ class DKGNode:
         """
         return {
             'uid': self.uid,
+            'pk_hash': pk_hash,  # [CRITICAL] Bind to specific public key
             # SMALL SECRETS (for Rejection Sampling check)
             'small_secret_s1': self.my_small_secret_s1,
             'small_secret_s2': self.my_small_secret_s2,
@@ -449,8 +459,8 @@ def run_dkg_protocol(n: int, t: int, level: int = 2):
     print(f'\n[DKG] Public key hash: {pk_hash}')
     print(f'[DKG] ✓ Setup complete!\n')
     
-    # Collect keypairs with DUAL SECRETS
-    user_keypairs = [node.get_keypair_info() for node in nodes]
+    # Collect keypairs with DUAL SECRETS and PK_HASH binding
+    user_keypairs = [node.get_keypair_info(pk_hash=pk_hash) for node in nodes]
     
     # Verify dual secrets structure
     print(f'[DKG] ✓ Each user has DUAL SECRETS:', file=sys.stderr)
@@ -461,6 +471,7 @@ def run_dkg_protocol(n: int, t: int, level: int = 2):
                   for c in poly.get_centered_coeffs())**0.5
     print(f'[DKG]   - s_i (SMALL): ||s1|| ≈ {s1_norm:.0f} (for rejection check)', file=sys.stderr)
     print(f'[DKG]   - x_i (LARGE): ||x1|| ≈ {x1_norm:.0f} (for signing)', file=sys.stderr)
+    print(f'[DKG]   - pk_hash: {pk_hash} (BINDING to this DKG group only)', file=sys.stderr)
     
     return user_keypairs, public_key
 
